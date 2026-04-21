@@ -1,28 +1,8 @@
 {
-    "diseases": [
-        "diabetes",
-        "heart_disease",
-        "hypertension",
-        "stroke"
-    ],
-    "features": [
-        "age",
-        "gender",
-        "bmi",
-        "blood_pressure",
-        "cholesterol",
-        "blood_sugar",
-        "heart_rate",
-        "smoking",
-        "exercise_hours",
-        "family_history"
-    ],
-    "training_date": "2026-04-22 02:04:19",
-    "training_samples": 6524,
     "accuracies": {
-        "Diabetes": 0.934,
-        "Heart Disease": 0.948,
-        "Hypertension": 0.965,
-        "Stroke": 0.929
+        "diabetes": 0.926,
+        "heart_disease": 0.934,
+        "hypertension": 0.953,
+        "stroke": 0.924
     }
 }
