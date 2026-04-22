@@ -1,1279 +1,1574 @@
-# app.py
-"""
-Water-Borne Disease Early Warning System
-Northeast India Community Health Monitoring
-COMPLETE VERSION WITH ALL FEATURES
-"""
-
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
 import pickle
 import json
-import plotly.graph_objects as go
-import plotly.express as px
+import io
+import time
+from pathlib import Path
 from datetime import datetime
 import warnings
 
+import plotly.express as px
+import plotly.graph_objects as go
+
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+from reportlab.lib.utils import simpleSplit
+
 warnings.filterwarnings("ignore")
 
-# ============================================================================
-# PAGE CONFIGURATION
-# ============================================================================
+# =========================================================
+# PAGE CONFIG
+# =========================================================
 st.set_page_config(
-    page_title="Water Disease Early Warning",
+    page_title="AquaShield India Premium",
     page_icon="💧",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# ============================================================================
-# CUSTOM CSS
-# ============================================================================
-st.markdown(
-    """
-<style>
-    .main-header {
-        font-size: 2.5rem;
-        font-weight: bold;
-        background: linear-gradient(90deg, #0066cc 0%, #00cc99 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        text-align: center;
-        padding: 1rem 0;
-    }
-    .alert-high {
-        background: linear-gradient(135deg, #ffebee 0%, #ffcdd2 100%);
-        border-left: 5px solid #f44336;
-        padding: 1.5rem;
-        border-radius: 10px;
-        margin: 1rem 0;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-    }
-    .alert-low {
-        background: linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 100%);
-        border-left: 5px solid #4caf50;
-        padding: 1.5rem;
-        border-radius: 10px;
-        margin: 1rem 0;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-    }
-    .metric-card {
-        background: white;
-        padding: 1.5rem;
-        border-radius: 10px;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        text-align: center;
-        transition: transform 0.3s;
-    }
-    .metric-card:hover {
-        transform: translateY(-3px);
-        box-shadow: 0 4px 8px rgba(0,0,0,0.15);
-    }
-    .stButton>button {
-        background: linear-gradient(90deg, #0066cc 0%, #00cc99 100%);
-        color: white;
-        font-weight: bold;
-        border: none;
-        padding: 0.75rem 2rem;
-        border-radius: 8px;
-    }
-    .stButton>button:hover {
-        transform: scale(1.02);
-        box-shadow: 0 4px 12px rgba(0, 102, 204, 0.3);
-    }
-</style>
-""",
-    unsafe_allow_html=True,
-)
+# =========================================================
+# PATHS
+# =========================================================
+BASE_DIR = Path(".")
+MODELS_DIR = BASE_DIR / "models"
+HISTORY_FILE = BASE_DIR / "test_history.json"
 
-# ============================================================================
-# SESSION STATE
-# ============================================================================
-if "test_history" not in st.session_state:
-    st.session_state.test_history = []
-if "alerts" not in st.session_state:
-    st.session_state.alerts = []
+# =========================================================
+# INDIA STATES + MAHARASHTRA DISTRICTS
+# =========================================================
+INDIA_STATES_UTS = [
+    "Andhra Pradesh", "Arunachal Pradesh", "Assam", "Bihar", "Chhattisgarh", "Goa",
+    "Gujarat", "Haryana", "Himachal Pradesh", "Jharkhand", "Karnataka", "Kerala",
+    "Madhya Pradesh", "Maharashtra", "Manipur", "Meghalaya", "Mizoram", "Nagaland",
+    "Odisha", "Punjab", "Rajasthan", "Sikkim", "Tamil Nadu", "Telangana",
+    "Tripura", "Uttar Pradesh", "Uttarakhand", "West Bengal",
+    "Andaman and Nicobar Islands", "Chandigarh", "Dadra and Nagar Haveli and Daman and Diu",
+    "Delhi", "Jammu and Kashmir", "Ladakh", "Lakshadweep", "Puducherry"
+]
 
+MAHARASHTRA_DISTRICTS = [
+    "Ahmednagar", "Akola", "Amravati", "Aurangabad", "Beed", "Bhandara", "Buldhana",
+    "Chandrapur", "Dhule", "Gadchiroli", "Gondia", "Hingoli", "Jalgaon", "Jalna",
+    "Kolhapur", "Latur", "Mumbai City", "Mumbai Suburban", "Nagpur", "Nanded",
+    "Nandurbar", "Nashik", "Osmanabad", "Palghar", "Parbhani", "Pune", "Raigad",
+    "Ratnagiri", "Sangli", "Satara", "Sindhudurg", "Solapur", "Thane", "Wardha",
+    "Washim", "Yavatmal"
+]
 
-# ============================================================================
-# LOAD MODELS
-# ============================================================================
-@st.cache_resource
-def load_all_models():
-    try:
-        diseases = ["cholera", "typhoid", "dysentery", "hepatitis_a", "overall"]
-        models = {}
-        scalers = {}
-
-        for disease in diseases:
-            with open(f"models/{disease}_model.pkl", "rb") as f:
-                models[disease] = pickle.load(f)
-            with open(f"models/{disease}_scaler.pkl", "rb") as f:
-                scalers[disease] = pickle.load(f)
-
-        with open("models/feature_names.pkl", "rb") as f:
-            features = pickle.load(f)
-
-        with open("models/label_encoders.pkl", "rb") as f:
-            encoders = pickle.load(f)
-
-        with open("models/metadata.json", "r") as f:
-            metadata = json.load(f)
-
-        return models, scalers, features, encoders, metadata, True
-    except Exception as e:
-        st.error(f"Error loading models: {str(e)}")
-        return None, None, None, None, None, False
-
-
-# ============================================================================
-# DISEASE INFORMATION
-# ============================================================================
-DISEASES = {
-    "cholera": {
-        "name": "🦠 Cholera",
-        "color": "#e53935",
-        "description": "Acute diarrheal infection caused by Vibrio cholerae",
-        "symptoms": "Severe watery diarrhea, vomiting, rapid dehydration",
-        "prevention": "Safe water, proper sanitation, hand hygiene, vaccination",
+# =========================================================
+# TEXTS
+# =========================================================
+TEXTS = {
+    "English": {
+        "title": "💧 AquaShield India Premium",
+        "subtitle": "Water Disease Prediction, Safety Analysis & Health Advisory Dashboard",
+        "tagline": "Clear visuals, smart alerts, India-ready geography, teacher-friendly premium design",
+        "dashboard": "🏠 Dashboard",
+        "test": "🧪 Water Quality Test",
+        "batch": "📂 Batch Analysis",
+        "analytics": "📈 Live Analytics",
+        "history": "🕒 Test History",
+        "bot": "🤖 Awareness Bot",
+        "about": "ℹ️ About System",
+        "deploy": "🚀 Deploy Guide",
+        "navigation": "Navigation",
+        "stats": "System Stats",
+        "total_tests": "Total Tests",
+        "alerts": "Active Alerts",
+        "accuracy": "Model Accuracy",
+        "features": "Features",
+        "fill": "Fill the details below and click Predict & Analyze.",
+        "location": "📍 Location & Source Details",
+        "params": "💧 Water Quality Parameters",
+        "predict": "🚀 Predict & Analyze",
+        "results": "Detailed Prediction Results",
+        "recommend": "🧠 Smart Recommendations",
+        "safety": "⚠️ Water Safety Analysis",
+        "history_title": "Recent Test Activity",
+        "prob_chart": "Disease Probability Chart",
+        "risk_chart": "Overall Risk Gauge",
+        "param_chart": "Parameter Profile",
+        "trend_chart": "Risk Trend Over Time",
+        "health_advisory": "🩺 Health Advisory Cards",
+        "export_pdf": "⬇️ Export PDF Report",
+        "download_csv": "⬇️ Download CSV",
+        "upload_csv": "Upload CSV",
+        "run_batch": "Run Batch Prediction",
+        "required_cols": "Required CSV Columns",
+        "single_dashboard": "🎯 Prediction Dashboard",
+        "clear_history": "🗑️ Clear History",
+        "models_missing": "Required model files were not found in the models folder.",
+        "prediction_failed": "Prediction failed",
+        "batch_failed": "Batch analysis failed",
+        "safe_msg": "All major parameters appear within comparatively safer ranges.",
+        "unsafe_msg": "Unsafe parameters detected",
+        "no_history": "No history available yet.",
+        "state_ui": "Selected State",
+        "district_ui": "District",
+        "model_state": "Model State",
+        "mh_note": "Maharashtra selected — district dropdown enabled.",
+        "unsupported_state_note": "This state is outside the trained model geography. Prediction may not be available unless you select a supported model state.",
+        "deploy_text": "Push your project to GitHub, then connect the repository on Streamlit Community Cloud and select app.py.",
+        "geo_card_title": "🗺️ Geography Intelligence",
+        "geo_card_text": "All India states are available in UI. Maharashtra includes district-level selection for richer demo presentation.",
+        "supported_state_info": "Supported model states",
+        "batch_summary": "Batch Risk Distribution",
+        "loader_1": "Loading dashboard engine...",
+        "loader_2": "Loading ML prediction modules...",
+        "loader_3": "Preparing charts, health cards and reports...",
+        "loader_4": "System ready.",
+        "bot_title": "🤖 Water Safety Awareness Bot",
+        "bot_desc": "This chatbot helps users learn about safe drinking water, contamination prevention, hygiene, and emergency precautions.",
+        "bot_tip_1": "Ask: Is my water safe to drink?",
+        "bot_tip_2": "Ask: How to prevent cholera and typhoid?",
+        "bot_tip_3": "Ask: What should I do if water is contaminated?",
+        "bot_open": "🌐 Open Bot in New Tab",
+        "bot_embed_note": "If the embedded bot does not load, use the button below to open it in a new tab.",
+        "water_score": "Water Safety Score",
+        "traffic_title": "🚦 Traffic Light Risk Widget",
     },
-    "typhoid": {
-        "name": "🌡️ Typhoid",
-        "color": "#fb8c00",
-        "description": "Bacterial infection caused by Salmonella typhi",
-        "symptoms": "Prolonged fever, weakness, stomach pain, headache, loss of appetite",
-        "prevention": "Clean water, vaccination, food safety, hygiene",
+    "Marathi": {
+        "title": "💧 AquaShield India Premium",
+        "subtitle": "पाणीजन्य रोग भाकीत, सुरक्षा विश्लेषण आणि आरोग्य सूचना डॅशबोर्ड",
+        "tagline": "स्पष्ट visuals, स्मार्ट alerts, India-ready geography आणि premium design",
+        "dashboard": "🏠 डॅशबोर्ड",
+        "test": "🧪 पाणी गुणवत्ता चाचणी",
+        "batch": "📂 बॅच विश्लेषण",
+        "analytics": "📈 लाईव्ह अॅनालिटिक्स",
+        "history": "🕒 चाचणी इतिहास",
+        "bot": "🤖 Awareness Bot",
+        "about": "ℹ️ सिस्टम माहिती",
+        "deploy": "🚀 डिप्लॉय मार्गदर्शक",
+        "navigation": "नेव्हिगेशन",
+        "stats": "सिस्टम आकडे",
+        "total_tests": "एकूण चाचण्या",
+        "alerts": "सक्रिय अलर्ट",
+        "accuracy": "मॉडेल अचूकता",
+        "features": "फीचर्स",
+        "fill": "खालील माहिती भरा आणि Predict & Analyze वर क्लिक करा.",
+        "location": "📍 ठिकाण आणि स्रोत माहिती",
+        "params": "💧 पाणी गुणवत्ता मापदंड",
+        "predict": "🚀 Predict & Analyze",
+        "results": "सविस्तर निकाल",
+        "recommend": "🧠 स्मार्ट शिफारसी",
+        "safety": "⚠️ पाणी सुरक्षा विश्लेषण",
+        "history_title": "अलीकडील चाचणी नोंदी",
+        "prob_chart": "रोग संभाव्यता चार्ट",
+        "risk_chart": "एकूण जोखीम गेज",
+        "param_chart": "मापदंड प्रोफाइल",
+        "trend_chart": "वेळेनुसार जोखीम ट्रेंड",
+        "health_advisory": "🩺 आरोग्य सूचना कार्ड्स",
+        "export_pdf": "⬇️ PDF रिपोर्ट डाउनलोड",
+        "download_csv": "⬇️ CSV डाउनलोड",
+        "upload_csv": "CSV अपलोड करा",
+        "run_batch": "बॅच प्रेडिक्शन चालवा",
+        "required_cols": "आवश्यक CSV कॉलम्स",
+        "single_dashboard": "🎯 प्रेडिक्शन डॅशबोर्ड",
+        "clear_history": "🗑️ इतिहास साफ करा",
+        "models_missing": "models folder मध्ये आवश्यक model files सापडल्या नाहीत.",
+        "prediction_failed": "प्रेडिक्शन फेल झाले",
+        "batch_failed": "बॅच विश्लेषण फेल झाले",
+        "safe_msg": "मुख्य मापदंड तुलनेने सुरक्षित मर्यादेत आहेत.",
+        "unsafe_msg": "असुरक्षित मापदंड आढळले",
+        "no_history": "अजून history उपलब्ध नाही.",
+        "state_ui": "निवडलेले राज्य",
+        "district_ui": "जिल्हा",
+        "model_state": "मॉडेल राज्य",
+        "mh_note": "Maharashtra निवडले आहे — district dropdown enabled.",
+        "unsupported_state_note": "हे राज्य trained model geography मध्ये नाही. Supported model state निवडल्याशिवाय prediction reliable नसेल.",
+        "deploy_text": "Project GitHub वर push करा, मग Streamlit Community Cloud वर repo connect करून app.py निवडा.",
+        "geo_card_title": "🗺️ Geography Intelligence",
+        "geo_card_text": "UI मध्ये सर्व India states उपलब्ध आहेत. Maharashtra साठी district-level selection दिले आहे.",
+        "supported_state_info": "मॉडेलला support असलेली राज्ये",
+        "batch_summary": "बॅच जोखीम वितरण",
+        "loader_1": "Dashboard engine load होत आहे...",
+        "loader_2": "ML prediction modules load होत आहेत...",
+        "loader_3": "Charts, health cards आणि reports तयार होत आहेत...",
+        "loader_4": "System तयार आहे.",
+        "bot_title": "🤖 Water Safety Awareness Bot",
+        "bot_desc": "हा chatbot सुरक्षित पिण्याचे पाणी, contamination prevention, hygiene आणि emergency precautions बद्दल माहिती देतो.",
+        "bot_tip_1": "विचार: हे पाणी पिण्यास सुरक्षित आहे का?",
+        "bot_tip_2": "विचार: cholera आणि typhoid कसे टाळायचे?",
+        "bot_tip_3": "विचार: पाणी contaminated असेल तर काय करायचे?",
+        "bot_open": "🌐 Bot नवीन tab मध्ये उघडा",
+        "bot_embed_note": "जर embedded bot load झाला नाही तर खालील button वापरून new tab मध्ये उघडा.",
+        "water_score": "Water Safety Score",
+        "traffic_title": "🚦 Traffic Light Risk Widget",
     },
-    "dysentery": {
-        "name": "💊 Dysentery",
-        "color": "#8e24aa",
-        "description": "Intestinal inflammation causing bloody diarrhea",
-        "symptoms": "Bloody diarrhea, severe abdominal cramps, fever, nausea",
-        "prevention": "Safe water, hygiene, proper sanitation, food safety",
-    },
-    "hepatitis_a": {
-        "name": "🧬 Hepatitis A",
-        "color": "#43a047",
-        "description": "Liver infection caused by Hepatitis A virus",
-        "symptoms": "Fatigue, nausea, jaundice, abdominal pain, dark urine",
-        "prevention": "Vaccination, safe water, hand hygiene, food safety",
+    "Hindi": {
+        "title": "💧 AquaShield India Premium",
+        "subtitle": "जल-जनित रोग भविष्यवाणी, सुरक्षा विश्लेषण और स्वास्थ्य सलाह डैशबोर्ड",
+        "tagline": "स्पष्ट visuals, smart alerts, India-ready geography और premium design",
+        "dashboard": "🏠 Dashboard",
+        "test": "🧪 Water Quality Test",
+        "batch": "📂 Batch Analysis",
+        "analytics": "📈 Live Analytics",
+        "history": "🕒 Test History",
+        "bot": "🤖 Awareness Bot",
+        "about": "ℹ️ About System",
+        "deploy": "🚀 Deploy Guide",
+        "navigation": "Navigation",
+        "stats": "System Stats",
+        "total_tests": "Total Tests",
+        "alerts": "Active Alerts",
+        "accuracy": "Model Accuracy",
+        "features": "Features",
+        "fill": "नीचे सभी विवरण भरें और Predict & Analyze पर क्लिक करें.",
+        "location": "📍 Location & Source Details",
+        "params": "💧 Water Quality Parameters",
+        "predict": "🚀 Predict & Analyze",
+        "results": "Detailed Results",
+        "recommend": "🧠 Smart Recommendations",
+        "safety": "⚠️ Water Safety Analysis",
+        "history_title": "Recent Test Activity",
+        "prob_chart": "Disease Probability Chart",
+        "risk_chart": "Overall Risk Gauge",
+        "param_chart": "Parameter Profile",
+        "trend_chart": "Risk Trend Over Time",
+        "health_advisory": "🩺 Health Advisory Cards",
+        "export_pdf": "⬇️ Export PDF Report",
+        "download_csv": "⬇️ Download CSV",
+        "upload_csv": "Upload CSV",
+        "run_batch": "Run Batch Prediction",
+        "required_cols": "Required CSV Columns",
+        "single_dashboard": "🎯 Prediction Dashboard",
+        "clear_history": "🗑️ Clear History",
+        "models_missing": "models folder में required model files नहीं मिलीं.",
+        "prediction_failed": "Prediction failed",
+        "batch_failed": "Batch analysis failed",
+        "safe_msg": "मुख्य पैरामीटर अपेक्षाकृत सुरक्षित सीमा में हैं.",
+        "unsafe_msg": "Unsafe parameters detected",
+        "no_history": "अभी history उपलब्ध नहीं है.",
+        "state_ui": "Selected State",
+        "district_ui": "District",
+        "model_state": "Model State",
+        "mh_note": "Maharashtra selected — district dropdown enabled.",
+        "unsupported_state_note": "यह state trained model geography के बाहर है. Reliable prediction के लिए supported model state चुनें.",
+        "deploy_text": "Project GitHub पर push करें, फिर Streamlit Community Cloud पर repo connect करके app.py चुनें.",
+        "geo_card_title": "🗺️ Geography Intelligence",
+        "geo_card_text": "UI में सभी India states available हैं. Maharashtra के लिए district-level selection दिया गया है.",
+        "supported_state_info": "Supported model states",
+        "batch_summary": "Batch Risk Distribution",
+        "loader_1": "Dashboard engine load हो रहा है...",
+        "loader_2": "ML prediction modules load हो रहे हैं...",
+        "loader_3": "Charts, health cards और reports तैयार हो रहे हैं...",
+        "loader_4": "System ready.",
+        "bot_title": "🤖 Water Safety Awareness Bot",
+        "bot_desc": "यह chatbot safe drinking water, contamination prevention, hygiene और emergency precautions के बारे में जानकारी देता है.",
+        "bot_tip_1": "पूछें: क्या यह पानी पीने के लिए safe है?",
+        "bot_tip_2": "पूछें: cholera और typhoid को कैसे रोका जाए?",
+        "bot_tip_3": "पूछें: अगर पानी contaminated हो तो क्या करें?",
+        "bot_open": "🌐 Bot को new tab में खोलें",
+        "bot_embed_note": "अगर embedded bot load नहीं होता है, तो नीचे वाला button use करें.",
+        "water_score": "Water Safety Score",
+        "traffic_title": "🚦 Traffic Light Risk Widget",
     },
 }
 
+# =========================================================
+# CSS
+# =========================================================
+st.markdown(
+    """
+    <style>
+    .stApp {
+        background:
+            radial-gradient(circle at top left, rgba(56,189,248,0.18), transparent 20%),
+            radial-gradient(circle at top right, rgba(167,139,250,0.16), transparent 24%),
+            linear-gradient(180deg, #f8fbff 0%, #eef4ff 45%, #f8fbff 100%);
+        color: #0f172a;
+    }
+    section[data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #0f172a 0%, #111827 100%) !important;
+        border-right: 1px solid rgba(255,255,255,0.08);
+    }
+    section[data-testid="stSidebar"] * {
+        color: #f8fafc !important;
+    }
+    .main .block-container {
+        padding-top: 1.2rem;
+        padding-bottom: 2rem;
+    }
+    .hero-card {
+        background: linear-gradient(135deg, #0ea5e9 0%, #2563eb 45%, #7c3aed 100%);
+        border-radius: 26px;
+        padding: 1.7rem;
+        color: white;
+        box-shadow: 0 18px 40px rgba(37, 99, 235, 0.20);
+        margin-bottom: 1.2rem;
+    }
+    .hero-title {
+        font-size: 2.15rem;
+        font-weight: 900;
+        margin-bottom: 0.3rem;
+    }
+    .hero-sub {
+        font-size: 1rem;
+        opacity: 0.97;
+    }
+    .metric-tile {
+        background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
+        border: 1px solid rgba(37,99,235,0.08);
+        border-radius: 20px;
+        padding: 1rem;
+        box-shadow: 0 12px 26px rgba(15,23,42,0.06);
+    }
+    .section-title {
+        font-size: 1.2rem;
+        font-weight: 800;
+        color: #1d4ed8;
+        margin-top: 0.5rem;
+        margin-bottom: 0.8rem;
+    }
+    .result-low {
+        background: linear-gradient(90deg, #10b981, #14b8a6);
+        color: white;
+        padding: 1rem;
+        border-radius: 18px;
+        font-weight: 800;
+    }
+    .result-medium {
+        background: linear-gradient(90deg, #f59e0b, #f97316);
+        color: white;
+        padding: 1rem;
+        border-radius: 18px;
+        font-weight: 800;
+    }
+    .result-high {
+        background: linear-gradient(90deg, #ef4444, #ec4899);
+        color: white;
+        padding: 1rem;
+        border-radius: 18px;
+        font-weight: 800;
+    }
+    .advisory-card {
+        border-radius: 18px;
+        padding: 1rem;
+        margin-bottom: 0.8rem;
+        color: white;
+        font-weight: 600;
+        box-shadow: 0 12px 24px rgba(15,23,42,0.10);
+    }
+    .advisory-red { background: linear-gradient(135deg, #ef4444, #f97316); }
+    .advisory-yellow { background: linear-gradient(135deg, #facc15, #f59e0b); color: #111827; }
+    .advisory-green { background: linear-gradient(135deg, #10b981, #06b6d4); }
+    .deploy-box {
+        background: linear-gradient(135deg, #eff6ff, #f5f3ff);
+        border: 1px solid rgba(99,102,241,0.16);
+        border-radius: 18px;
+        padding: 1rem;
+        color: #0f172a;
+        box-shadow: 0 12px 24px rgba(15,23,42,0.06);
+    }
+    .small-note {
+        color: #475569;
+        font-size: 0.92rem;
+    }
+    .splash-wrap {
+        background: linear-gradient(135deg, #e0f2fe 0%, #eef2ff 55%, #f5f3ff 100%);
+        border: 1px solid rgba(99,102,241,0.14);
+        border-radius: 24px;
+        padding: 2rem;
+        text-align: center;
+        box-shadow: 0 18px 36px rgba(15,23,42,0.08);
+        margin-top: 2rem;
+        margin-bottom: 2rem;
+    }
+    .splash-title {
+        font-size: 2rem;
+        font-weight: 900;
+        color: #1e3a8a;
+        margin-bottom: 0.5rem;
+    }
+    .splash-sub {
+        font-size: 1rem;
+        color: #334155;
+    }
+    .traffic-wrap {
+        display:flex;
+        gap:14px;
+        align-items:center;
+        margin: 0.5rem 0 1rem 0;
+    }
+    .traffic-light {
+        width:26px;
+        height:26px;
+        border-radius:50%;
+        border:2px solid rgba(15,23,42,0.18);
+        box-shadow: 0 4px 10px rgba(15,23,42,0.12);
+    }
+    .traffic-on-green { background:#10b981; }
+    .traffic-on-yellow { background:#f59e0b; }
+    .traffic-on-red { background:#ef4444; }
+    .traffic-off { background:#e2e8f0; }
+    .score-box {
+        background: linear-gradient(135deg, #ffffff, #eff6ff);
+        border: 1px solid rgba(37,99,235,0.12);
+        border-radius: 18px;
+        padding: 1rem;
+        box-shadow: 0 10px 22px rgba(15,23,42,0.06);
+        margin-bottom: 1rem;
+    }
+    div[data-testid="stMetric"] {
+        background: rgba(255,255,255,0.85);
+        border: 1px solid rgba(148,163,184,0.14);
+        border-radius: 18px;
+        padding: 12px;
+        box-shadow: 0 10px 22px rgba(15,23,42,0.06);
+    }
+    div[data-testid="stMetricLabel"] {
+        color: #334155 !important;
+        font-weight: 700;
+    }
+    div[data-testid="stMetricValue"] {
+        color: #0f172a !important;
+        font-weight: 900;
+    }
+    .stDataFrame, .stTable {
+        border-radius: 16px;
+        overflow: hidden;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
-# ============================================================================
-# UTILITY FUNCTIONS
-# ============================================================================
-def create_gauge(value, title="Risk Score"):
-    fig = go.Figure(
-        go.Indicator(
-            mode="gauge+number",
-            value=value,
-            title={"text": title, "font": {"size": 18}},
-            number={"font": {"size": 36}},
-            gauge={
-                "axis": {"range": [0, 100]},
-                "bar": {"color": "#00cc99", "thickness": 0.75},
-                "bgcolor": "white",
-                "borderwidth": 2,
-                "bordercolor": "#0066cc",
-                "steps": [
-                    {"range": [0, 30], "color": "#c8e6c9"},
-                    {"range": [30, 70], "color": "#fff9c4"},
-                    {"range": [70, 100], "color": "#ffcdd2"},
-                ],
-                "threshold": {
-                    "line": {"color": "red", "width": 4},
-                    "thickness": 0.75,
-                    "value": 70,
-                },
-            },
-        )
+# =========================================================
+# HELPERS
+# =========================================================
+def safe_load_pickle(path):
+    with open(path, "rb") as f:
+        return pickle.load(f)
+
+def load_metadata():
+    for path in [MODELS_DIR / "metadata.json", MODELS_DIR / "model_metadata.json"]:
+        if path.exists():
+            with open(path, "r") as f:
+                return json.load(f)
+    return None
+
+@st.cache_resource
+def load_assets():
+    metadata = load_metadata()
+    if metadata is None:
+        return None
+
+    enc_path = MODELS_DIR / "label_encoders.pkl"
+    feat_path = MODELS_DIR / "feature_names.pkl"
+
+    if not enc_path.exists() or not feat_path.exists():
+        return None
+
+    encoders = safe_load_pickle(enc_path)
+    features = safe_load_pickle(feat_path)
+
+    diseases = ["cholera", "typhoid", "dysentery", "hepatitis_a", "overall"]
+    models = {}
+    scalers = {}
+
+    for d in diseases:
+        mp = MODELS_DIR / f"{d}_model.pkl"
+        sp = MODELS_DIR / f"{d}_scaler.pkl"
+        if mp.exists():
+            models[d] = safe_load_pickle(mp)
+        if sp.exists():
+            scalers[d] = safe_load_pickle(sp)
+
+    if not models or not scalers:
+        return None
+
+    return {
+        "metadata": metadata,
+        "encoders": encoders,
+        "features": features,
+        "models": models,
+        "scalers": scalers,
+    }
+
+def initialize_history():
+    if not HISTORY_FILE.exists():
+        with open(HISTORY_FILE, "w") as f:
+            json.dump([], f)
+
+def load_history():
+    initialize_history()
+    try:
+        with open(HISTORY_FILE, "r") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+def save_history(record):
+    history = load_history()
+    history.insert(0, record)
+    history = history[:500]
+    with open(HISTORY_FILE, "w") as f:
+        json.dump(history, f, indent=2)
+
+def get_classes(encoders, key):
+    return list(encoders[key].classes_) if key in encoders else []
+
+def safe_transform(encoders, key, value):
+    classes = list(encoders[key].classes_)
+    if value not in classes:
+        raise ValueError(f"Unknown value '{value}' in {key}")
+    return int(encoders[key].transform([value])[0])
+
+def prepare_input_dataframe(input_dict, features):
+    row = {}
+    for feat in features:
+        row[feat] = input_dict.get(feat, 0)
+    return pd.DataFrame([row]).reindex(columns=features, fill_value=0)
+
+def predict_all(input_df, models, scalers):
+    results = {}
+    for disease, model in models.items():
+        scaler = scalers[disease]
+        scaled = scaler.transform(input_df)
+        pred = int(model.predict(scaled)[0])
+        prob = float(model.predict_proba(scaled)[0][1]) if hasattr(model, "predict_proba") else float(pred)
+        results[disease] = {"prediction": pred, "probability": prob}
+    return results
+
+def get_risk(prob):
+    if prob < 0.35:
+        return "Low Risk", "low"
+    if prob < 0.70:
+        return "Moderate Risk", "medium"
+    return "High Risk", "high"
+
+def risk_box(label, level):
+    cls = "result-low" if level == "low" else "result-medium" if level == "medium" else "result-high"
+    return f'<div class="{cls}">🚨 Overall Outbreak Alert: {label}</div>'
+
+def parameter_warnings(values):
+    warnings_list = []
+    if values["ph"] < 6.5 or values["ph"] > 8.5:
+        warnings_list.append("pH is outside safer range")
+    if values["turbidity_ntu"] > 5:
+        warnings_list.append("Turbidity is high")
+    if values["bod_mg_l"] > 3:
+        warnings_list.append("BOD is high")
+    if values["fecal_coliform_mpn"] > 10:
+        warnings_list.append("Fecal coliform is dangerously high")
+    if values["total_coliform_mpn"] > 50:
+        warnings_list.append("Total coliform is high")
+    if values["arsenic_ug_l"] > 10:
+        warnings_list.append("Arsenic exceeds safe limit")
+    if values["iron_mg_l"] > 0.3:
+        warnings_list.append("Iron exceeds recommended limit")
+    if values["nitrate_mg_l"] > 45:
+        warnings_list.append("Nitrate is too high")
+    if values["fluoride_mg_l"] > 1.5:
+        warnings_list.append("Fluoride is too high")
+    if values["sanitation_access_percent"] < 50:
+        warnings_list.append("Sanitation access is low")
+    return warnings_list
+
+def generate_recommendations(results, warnings_list):
+    recs = []
+    overall_prob = results["overall"]["probability"]
+
+    if overall_prob >= 0.70:
+        recs.extend([
+            "🚨 Immediate public health alert recommended",
+            "🔥 Boil water before drinking",
+            "🧴 Start chlorination and disinfection",
+            "🏥 Increase local health monitoring",
+        ])
+    elif overall_prob >= 0.35:
+        recs.extend([
+            "⚠️ Water retesting is advised",
+            "💧 Use filtered or boiled water temporarily",
+            "🧼 Improve sanitation and hygiene practices",
+        ])
+    else:
+        recs.extend([
+            "✅ Continue regular monitoring",
+            "💙 Current input looks comparatively safer",
+        ])
+
+    if results["cholera"]["probability"] >= 0.60:
+        recs.append("🦠 Cholera risk elevated: ensure chlorination and safe storage")
+    if results["typhoid"]["probability"] >= 0.60:
+        recs.append("🤒 Typhoid risk elevated: isolate unsafe drinking source")
+    if results["dysentery"]["probability"] >= 0.60:
+        recs.append("🧫 Dysentery risk elevated: improve hygiene and wastewater handling")
+    if results["hepatitis_a"]["probability"] >= 0.60:
+        recs.append("💉 Hepatitis A risk elevated: strengthen sanitation awareness")
+    if warnings_list:
+        recs.append("⚠️ Unsafe water parameters detected. Immediate recheck recommended")
+    return recs
+
+def calculate_water_safety_score(test_params, overall_prob):
+    score = 100
+
+    if test_params["ph"] < 6.5 or test_params["ph"] > 8.5:
+        score -= 8
+    if test_params["turbidity_ntu"] > 5:
+        score -= 10
+    if test_params["bod_mg_l"] > 3:
+        score -= 8
+    if test_params["fecal_coliform_mpn"] > 10:
+        score -= 15
+    if test_params["total_coliform_mpn"] > 50:
+        score -= 10
+    if test_params["arsenic_ug_l"] > 10:
+        score -= 12
+    if test_params["iron_mg_l"] > 0.3:
+        score -= 6
+    if test_params["nitrate_mg_l"] > 45:
+        score -= 8
+    if test_params["fluoride_mg_l"] > 1.5:
+        score -= 7
+    if test_params["sanitation_access_percent"] < 50:
+        score -= 8
+
+    score -= int(overall_prob * 30)
+    return max(0, min(100, score))
+
+def build_pdf_report(test_inputs, results, warnings_list, recs, safety_score):
+    buffer = io.BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=A4)
+    _, height = A4
+    y = height - 50
+
+    pdf.setFont("Helvetica-Bold", 18)
+    pdf.drawString(40, y, "AquaShield India Premium - Water Risk Report")
+    y -= 26
+
+    pdf.setFont("Helvetica", 10)
+    pdf.drawString(40, y, f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    y -= 18
+    pdf.drawString(40, y, f"Water Safety Score: {safety_score}/100")
+    y -= 22
+
+    pdf.setFont("Helvetica-Bold", 13)
+    pdf.drawString(40, y, "Input Summary")
+    y -= 18
+
+    pdf.setFont("Helvetica", 10)
+    for key, value in test_inputs.items():
+        line = f"{key}: {value}"
+        pdf.drawString(50, y, line[:110])
+        y -= 14
+        if y < 80:
+            pdf.showPage()
+            y = height - 50
+
+    y -= 8
+    pdf.setFont("Helvetica-Bold", 13)
+    pdf.drawString(40, y, "Prediction Results")
+    y -= 18
+
+    pdf.setFont("Helvetica", 10)
+    for disease, data in results.items():
+        txt = f"{disease}: probability {data['probability']*100:.2f}% | prediction {'Alert' if data['prediction']==1 else 'Normal'}"
+        pdf.drawString(50, y, txt[:110])
+        y -= 14
+        if y < 80:
+            pdf.showPage()
+            y = height - 50
+
+    y -= 8
+    pdf.setFont("Helvetica-Bold", 13)
+    pdf.drawString(40, y, "Safety Warnings")
+    y -= 18
+
+    pdf.setFont("Helvetica", 10)
+    if warnings_list:
+        for w in warnings_list:
+            lines = simpleSplit(f"- {w}", "Helvetica", 10, 500)
+            for line in lines:
+                pdf.drawString(50, y, line)
+                y -= 14
+                if y < 80:
+                    pdf.showPage()
+                    y = height - 50
+    else:
+        pdf.drawString(50, y, "No major warnings.")
+        y -= 14
+
+    y -= 8
+    pdf.setFont("Helvetica-Bold", 13)
+    pdf.drawString(40, y, "Recommendations")
+    y -= 18
+
+    pdf.setFont("Helvetica", 10)
+    for r in recs:
+        lines = simpleSplit(f"- {r}", "Helvetica", 10, 500)
+        for line in lines:
+            pdf.drawString(50, y, line)
+            y -= 14
+            if y < 80:
+                pdf.showPage()
+                y = height - 50
+
+    pdf.save()
+    buffer.seek(0)
+    return buffer
+
+def animated_counter(label, value, suffix=""):
+    st.markdown(
+        f"""
+        <div class="metric-tile">
+            <div style="font-size:0.95rem;color:#475569;font-weight:700;">{label}</div>
+            <div style="font-size:2rem;color:#0f172a;font-weight:900;margin-top:0.2rem;">{value}{suffix}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
-    fig.update_layout(height=280, margin=dict(l=20, r=20, t=50, b=20))
+
+def render_header(t):
+    st.markdown(
+        f"""
+        <div class="hero-card">
+            <div class="hero-title">{t["title"]}</div>
+            <div class="hero-sub">{t["subtitle"]}</div>
+            <div class="hero-sub">{t["tagline"]}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+def advisory_card(title, text, level):
+    cls = "advisory-green"
+    if level == "red":
+        cls = "advisory-red"
+    elif level == "yellow":
+        cls = "advisory-yellow"
+
+    st.markdown(
+        f"""
+        <div class="advisory-card {cls}">
+            <div style="font-size:1rem;font-weight:800;margin-bottom:0.25rem;">{title}</div>
+            <div style="font-size:0.95rem; white-space:pre-line;">{text}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+def traffic_light_widget(level, title):
+    green = "traffic-on-green" if level == "low" else "traffic-off"
+    yellow = "traffic-on-yellow" if level == "medium" else "traffic-off"
+    red = "traffic-on-red" if level == "high" else "traffic-off"
+
+    st.markdown(
+        f"""
+        <div class="score-box">
+            <div style="font-size:1rem;font-weight:800;color:#1d4ed8;margin-bottom:0.7rem;">{title}</div>
+            <div class="traffic-wrap">
+                <div class="traffic-light {green}"></div>
+                <div class="traffic-light {yellow}"></div>
+                <div class="traffic-light {red}"></div>
+            </div>
+            <div style="font-weight:700;color:#334155;">Current Signal: {level.upper()}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+# =========================================================
+# CHARTS
+# =========================================================
+def build_probability_chart(results, t):
+    df = pd.DataFrame({
+        "Disease": ["Cholera", "Typhoid", "Dysentery", "Hepatitis A", "Overall"],
+        "Probability": [
+            results["cholera"]["probability"] * 100,
+            results["typhoid"]["probability"] * 100,
+            results["dysentery"]["probability"] * 100,
+            results["hepatitis_a"]["probability"] * 100,
+            results["overall"]["probability"] * 100,
+        ]
+    })
+    fig = px.bar(
+        df,
+        x="Disease",
+        y="Probability",
+        color="Disease",
+        text="Probability",
+        title=t["prob_chart"],
+        color_discrete_sequence=["#0ea5e9", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444"],
+    )
+    fig.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(255,255,255,0.6)",
+        font=dict(color="#0f172a"),
+        showlegend=False,
+        title_font=dict(size=20)
+    )
     return fig
 
+def build_gauge_chart(prob, t):
+    value = prob * 100
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=value,
+        number={'suffix': "%", 'font': {'color': '#0f172a', 'size': 34}},
+        title={'text': t["risk_chart"], 'font': {'color': '#0f172a', 'size': 22}},
+        gauge={
+            'axis': {'range': [0, 100], 'tickcolor': '#334155'},
+            'bar': {'color': "#2563eb"},
+            'bgcolor': "white",
+            'borderwidth': 1,
+            'bordercolor': "#cbd5e1",
+            'steps': [
+                {'range': [0, 35], 'color': "#10b981"},
+                {'range': [35, 70], 'color': "#f59e0b"},
+                {'range': [70, 100], 'color': "#ef4444"},
+            ],
+            'threshold': {
+                'line': {'color': "#111827", 'width': 4},
+                'thickness': 0.8,
+                'value': value
+            }
+        }
+    ))
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#0f172a"),
+        margin=dict(l=20, r=20, t=70, b=20)
+    )
+    return fig
 
-def get_water_quality_status(params):
-    """Assess overall water quality"""
-    issues = []
+def build_parameter_chart(values, t):
+    labels = ["pH", "Turbidity", "BOD", "Fecal Coliform", "Arsenic", "Iron", "Nitrate"]
+    vals = [
+        values["ph"],
+        values["turbidity_ntu"],
+        values["bod_mg_l"],
+        values["fecal_coliform_mpn"],
+        values["arsenic_ug_l"],
+        values["iron_mg_l"],
+        values["nitrate_mg_l"],
+    ]
+    fig = px.line_polar(
+        r=vals,
+        theta=labels,
+        line_close=True,
+        title=t["param_chart"]
+    )
+    fig.update_traces(fill="toself", line_color="#2563eb", fillcolor="rgba(37,99,235,0.25)")
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#0f172a"),
+        polar=dict(
+            bgcolor="rgba(255,255,255,0.75)",
+            radialaxis=dict(visible=True, color="#334155"),
+            angularaxis=dict(color="#334155")
+        ),
+    )
+    return fig
 
-    if params.get("ph", 7) < 6.5 or params.get("ph", 7) > 8.5:
-        issues.append("pH abnormal")
-    if params.get("turbidity_ntu", 0) > 10:
-        issues.append("High turbidity")
-    if params.get("fecal_coliform_mpn", 0) > 10:
-        issues.append("Fecal contamination")
-    if params.get("dissolved_oxygen_mg_l", 10) < 5:
-        issues.append("Low oxygen")
-    if params.get("arsenic_ug_l", 0) > 10:
-        issues.append("Arsenic detected")
-    if params.get("nitrate_mg_l", 0) > 45:
-        issues.append("High nitrate")
+def build_history_trend(history, t):
+    if not history:
+        return None
+    df = pd.DataFrame(history[:25]).copy()
+    if "timestamp" not in df.columns or "overall_probability" not in df.columns:
+        return None
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    df = df.sort_values("timestamp")
+    df["overall_probability_percent"] = df["overall_probability"] * 100
 
-    if len(issues) == 0:
-        return "SAFE", "#4caf50", "✅ Water meets all safety standards"
-    elif len(issues) <= 2:
-        return "MODERATE", "#ff9800", f"⚠️ Issues found: {', '.join(issues)}"
+    fig = px.line(
+        df,
+        x="timestamp",
+        y="overall_probability_percent",
+        markers=True,
+        title=t["trend_chart"],
+        color_discrete_sequence=["#2563eb"],
+    )
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(255,255,255,0.65)",
+        font=dict(color="#0f172a"),
+    )
+    return fig
+
+def build_batch_pie(summary_df):
+    fig = px.pie(
+        summary_df,
+        names="Category",
+        values="Count",
+        color="Category",
+        color_discrete_map={
+            "High Risk": "#ef4444",
+            "Moderate Risk": "#f59e0b",
+            "Low Risk": "#10b981",
+        },
+        hole=0.55,
+    )
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#0f172a"),
+    )
+    return fig
+
+# =========================================================
+# SPLASH SCREEN
+# =========================================================
+def show_splash_once(t):
+    if "splash_seen" not in st.session_state:
+        st.session_state.splash_seen = False
+
+    if not st.session_state.splash_seen:
+        box = st.empty()
+        box.markdown(
+            f"""
+            <div class="splash-wrap">
+                <div class="splash-title">{t["title"]}</div>
+                <div class="splash-sub">{t["tagline"]}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        progress = st.progress(0)
+        status = st.empty()
+
+        for i in range(1, 101, 10):
+            progress.progress(i)
+            if i < 30:
+                status.info(t["loader_1"])
+            elif i < 60:
+                status.info(t["loader_2"])
+            elif i < 90:
+                status.info(t["loader_3"])
+            else:
+                status.success(t["loader_4"])
+            time.sleep(0.08)
+
+        st.session_state.splash_seen = True
+        box.empty()
+        progress.empty()
+        status.empty()
+
+# =========================================================
+# PAGES
+# =========================================================
+def show_missing_models(t):
+    render_header(t)
+    st.error(t["models_missing"])
+
+def show_dashboard(assets, t):
+    render_header(t)
+    history = load_history()
+    metadata = assets["metadata"]
+
+    overall_acc = 0
+    for row in metadata.get("results", []):
+        if row.get("Disease", "").lower() == "overall":
+            overall_acc = row.get("Accuracy", 0)
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        animated_counter(f"📋 {t['total_tests']}", len(history))
+    with c2:
+        animated_counter(f"🚨 {t['alerts']}", sum(1 for x in history if x.get("overall_probability", 0) >= 0.70))
+    with c3:
+        animated_counter(f"🎯 {t['accuracy']}", f"{overall_acc*100:.1f}", "%")
+    with c4:
+        animated_counter(f"🧠 {t['features']}", len(metadata.get("features", [])))
+
+    st.markdown(f'<div class="section-title">{t["geo_card_title"]}</div>', unsafe_allow_html=True)
+    advisory_card(t["geo_card_title"], t["geo_card_text"], "green")
+
+    st.markdown(f'<div class="section-title">{t["history_title"]}</div>', unsafe_allow_html=True)
+    if history:
+        df = pd.DataFrame(history[:10]).copy()
+        cols = [c for c in ["timestamp", "ui_state", "district", "water_source", "season", "overall_probability", "risk_label"] if c in df.columns]
+        if cols:
+            show_df = df[cols].copy()
+            if "overall_probability" in show_df.columns:
+                show_df["overall_probability"] = show_df["overall_probability"].apply(lambda x: f"{x*100:.1f}%")
+            st.dataframe(show_df, use_container_width=True, hide_index=True)
+
+        trend = build_history_trend(history, t)
+        if trend:
+            st.plotly_chart(trend, use_container_width=True)
     else:
-        return "UNSAFE", "#f44336", f"❌ Multiple issues: {', '.join(issues)}"
+        st.info(t["no_history"])
 
+def show_water_test(assets, t):
+    render_header(t)
+    st.markdown(f'<div class="section-title">{t["test"]}</div>', unsafe_allow_html=True)
+    st.write(t["fill"])
 
-# ============================================================================
-# MAIN APP
-# ============================================================================
+    encoders = assets["encoders"]
+    features = assets["features"]
+    models = assets["models"]
+    scalers = assets["scalers"]
+
+    supported_model_states = get_classes(encoders, "state")
+    location_options = get_classes(encoders, "location_type")
+    source_options = get_classes(encoders, "water_source")
+    season_options = get_classes(encoders, "season")
+
+    with st.form("water_test_form"):
+        st.markdown(f"### {t['location']}")
+        top1, top2, top3, top4 = st.columns(4)
+
+        with top1:
+            ui_state = st.selectbox(
+                t["state_ui"],
+                INDIA_STATES_UTS,
+                index=INDIA_STATES_UTS.index("Maharashtra")
+            )
+
+        with top2:
+            if ui_state == "Maharashtra":
+                district = st.selectbox(t["district_ui"], MAHARASHTRA_DISTRICTS)
+            else:
+                district = st.text_input(t["district_ui"], placeholder="Enter district / city")
+
+        with top3:
+            if ui_state in supported_model_states:
+                model_state = ui_state
+                st.selectbox(
+                    t["model_state"],
+                    supported_model_states,
+                    index=supported_model_states.index(model_state),
+                    disabled=True
+                )
+            else:
+                model_state = st.selectbox(t["model_state"], supported_model_states, index=0)
+
+        with top4:
+            season = st.selectbox("Season", season_options)
+
+        mid1, mid2, mid3 = st.columns([1.3, 1, 1])
+        with mid1:
+            location_type = st.selectbox("Location Type", location_options)
+        with mid2:
+            water_source = st.selectbox("Water Source", source_options)
+        with mid3:
+            st.markdown("#####")
+            if ui_state == "Maharashtra":
+                st.success(t["mh_note"])
+            elif ui_state not in supported_model_states:
+                st.warning(t["unsupported_state_note"])
+
+        st.caption(f"{t['supported_state_info']}: {', '.join(supported_model_states)}")
+
+        st.markdown(f"### {t['params']}")
+        c1, c2, c3, c4 = st.columns(4)
+
+        with c1:
+            ph = st.number_input("pH", 0.0, 14.0, 7.0, 0.1)
+            tds_mg_l = st.number_input("TDS (mg/L)", 0.0, 5000.0, 250.0, 1.0)
+            bod_mg_l = st.number_input("BOD (mg/L)", 0.0, 100.0, 3.0, 0.1)
+            fluoride_mg_l = st.number_input("Fluoride (mg/L)", 0.0, 10.0, 0.8, 0.1)
+
+        with c2:
+            turbidity_ntu = st.number_input("Turbidity (NTU)", 0.0, 1000.0, 3.0, 0.1)
+            dissolved_oxygen_mg_l = st.number_input("Dissolved Oxygen (mg/L)", 0.0, 20.0, 6.0, 0.1)
+            fecal_coliform_mpn = st.number_input("Fecal Coliform (MPN)", 0.0, 100000.0, 20.0, 1.0)
+            chloride_mg_l = st.number_input("Chloride (mg/L)", 0.0, 5000.0, 150.0, 1.0)
+
+        with c3:
+            total_coliform_mpn = st.number_input("Total Coliform (MPN)", 0.0, 100000.0, 50.0, 1.0)
+            nitrate_mg_l = st.number_input("Nitrate (mg/L)", 0.0, 500.0, 10.0, 0.1)
+            hardness_mg_l = st.number_input("Hardness (mg/L)", 0.0, 5000.0, 180.0, 1.0)
+            temperature_c = st.number_input("Temperature (°C)", 0.0, 60.0, 25.0, 0.1)
+
+        with c4:
+            arsenic_ug_l = st.number_input("Arsenic (µg/L)", 0.0, 1000.0, 5.0, 0.1)
+            iron_mg_l = st.number_input("Iron (mg/L)", 0.0, 100.0, 0.3, 0.1)
+            population_served = st.number_input("Population Served", 0.0, 10000000.0, 1500.0, 1.0)
+            sanitation_access_percent = st.slider("Sanitation Access (%)", 0.0, 100.0, 70.0, 1.0)
+
+        submit = st.form_submit_button(t["predict"], use_container_width=True)
+
+    if submit:
+        try:
+            input_encoded = {
+                "state_encoded": safe_transform(encoders, "state", model_state),
+                "location_type_encoded": safe_transform(encoders, "location_type", location_type),
+                "water_source_encoded": safe_transform(encoders, "water_source", water_source),
+                "season_encoded": safe_transform(encoders, "season", season),
+            }
+
+            test_params = {
+                "ph": ph,
+                "turbidity_ntu": turbidity_ntu,
+                "tds_mg_l": tds_mg_l,
+                "dissolved_oxygen_mg_l": dissolved_oxygen_mg_l,
+                "bod_mg_l": bod_mg_l,
+                "fecal_coliform_mpn": fecal_coliform_mpn,
+                "total_coliform_mpn": total_coliform_mpn,
+                "nitrate_mg_l": nitrate_mg_l,
+                "fluoride_mg_l": fluoride_mg_l,
+                "chloride_mg_l": chloride_mg_l,
+                "hardness_mg_l": hardness_mg_l,
+                "temperature_c": temperature_c,
+                "arsenic_ug_l": arsenic_ug_l,
+                "iron_mg_l": iron_mg_l,
+                "population_served": population_served,
+                "sanitation_access_percent": sanitation_access_percent,
+            }
+
+            input_df = prepare_input_dataframe({**input_encoded, **test_params}, features)
+            results = predict_all(input_df, models, scalers)
+
+            overall_prob = results["overall"]["probability"]
+            risk_text, risk_level = get_risk(overall_prob)
+            safety_score = calculate_water_safety_score(test_params, overall_prob)
+
+            st.markdown("---")
+            st.markdown(risk_box(risk_text, risk_level), unsafe_allow_html=True)
+
+            st.markdown(f'<div class="section-title">{t["single_dashboard"]}</div>', unsafe_allow_html=True)
+
+            m1, m2, m3, m4, m5 = st.columns(5)
+            disease_order = [
+                ("🦠 Cholera", "cholera"),
+                ("🤒 Typhoid", "typhoid"),
+                ("🧫 Dysentery", "dysentery"),
+                ("💉 Hepatitis A", "hepatitis_a"),
+                ("🚨 Overall", "overall"),
+            ]
+            for metric, (label, key) in zip([m1, m2, m3, m4, m5], disease_order):
+                metric.metric(label, f"{results[key]['probability']*100:.1f}%", "Alert" if results[key]["prediction"] == 1 else "Normal")
+
+            score_col, traffic_col = st.columns(2)
+            with score_col:
+                st.markdown(
+                    f"""
+                    <div class="score-box">
+                        <div style="font-size:1rem;font-weight:800;color:#1d4ed8;margin-bottom:0.35rem;">💯 {t["water_score"]}</div>
+                        <div style="font-size:2.2rem;font-weight:900;color:#0f172a;">{safety_score}/100</div>
+                        <div style="font-size:0.92rem;color:#475569;">Higher score means safer overall water condition.</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            with traffic_col:
+                traffic_light_widget(risk_level, t["traffic_title"])
+
+            rows = []
+            for label, key in disease_order:
+                rows.append({
+                    "Disease": label,
+                    "Prediction": "Outbreak Alert" if results[key]["prediction"] == 1 else "Normal",
+                    "Probability": f"{results[key]['probability']*100:.2f}%"
+                })
+            st.markdown(f"### {t['results']}")
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+            warnings_list = parameter_warnings(test_params)
+            recs = generate_recommendations(results, warnings_list)
+
+            left, right = st.columns([1, 1])
+            with left:
+                if warnings_list:
+                    st.error(f"⚠️ {t['unsafe_msg']}")
+                    for w in warnings_list:
+                        st.write(f"- {w}")
+                else:
+                    st.success(f"✅ {t['safe_msg']}")
+
+                st.markdown(f"### {t['recommend']}")
+                for r in recs:
+                    st.write(f"- {r}")
+
+            with right:
+                st.plotly_chart(build_gauge_chart(overall_prob, t), use_container_width=True)
+
+            bottom_left, bottom_right = st.columns(2)
+            with bottom_left:
+                st.plotly_chart(build_probability_chart(results, t), use_container_width=True)
+            with bottom_right:
+                st.plotly_chart(build_parameter_chart(test_params, t), use_container_width=True)
+
+            st.markdown(f"### {t['health_advisory']}")
+            if overall_prob >= 0.70:
+                advisory_card("🚨 Critical Health Advisory", "Water shows high outbreak risk. Use boiled or treated water only and inform local health authorities.", "red")
+            elif overall_prob >= 0.35:
+                advisory_card("⚠️ Preventive Advisory", "Risk is moderate. Retest water, improve sanitation, and avoid untreated direct consumption.", "yellow")
+            else:
+                advisory_card("✅ Safer Advisory", "Current sample appears comparatively safer, but regular monitoring should continue.", "green")
+
+            if results["cholera"]["probability"] >= 0.60:
+                advisory_card("🦠 Cholera Watch", "Ensure chlorination, safe storage, and hygiene precautions.", "red")
+            if results["typhoid"]["probability"] >= 0.60:
+                advisory_card("🤒 Typhoid Watch", "Avoid unsafe source mixing and prefer filtered drinking water.", "yellow")
+            if results["hepatitis_a"]["probability"] >= 0.60:
+                advisory_card("💉 Hepatitis A Watch", "Strengthen sanitation awareness and hygiene measures.", "yellow")
+
+            pdf_inputs = {
+                "UI State": ui_state,
+                "District": district if district else "-",
+                "Model State": model_state,
+                "Location Type": location_type,
+                "Water Source": water_source,
+                "Season": season,
+                "pH": ph,
+                "Turbidity NTU": turbidity_ntu,
+                "TDS mg/L": tds_mg_l,
+                "DO mg/L": dissolved_oxygen_mg_l,
+                "BOD mg/L": bod_mg_l,
+                "Fecal Coliform": fecal_coliform_mpn,
+                "Total Coliform": total_coliform_mpn,
+                "Nitrate mg/L": nitrate_mg_l,
+                "Fluoride mg/L": fluoride_mg_l,
+                "Chloride mg/L": chloride_mg_l,
+                "Hardness mg/L": hardness_mg_l,
+                "Temperature C": temperature_c,
+                "Arsenic ug/L": arsenic_ug_l,
+                "Iron mg/L": iron_mg_l,
+                "Population Served": population_served,
+                "Sanitation Access %": sanitation_access_percent,
+            }
+
+            pdf_buffer = build_pdf_report(pdf_inputs, results, warnings_list, recs, safety_score)
+            st.download_button(
+                t["export_pdf"],
+                data=pdf_buffer,
+                file_name=f"water_risk_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
+
+            record = {
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "ui_state": ui_state,
+                "district": district if district else "",
+                "model_state": model_state,
+                "location_type": location_type,
+                "water_source": water_source,
+                "season": season,
+                "overall_probability": overall_prob,
+                "risk_label": risk_text,
+                "water_safety_score": safety_score,
+                "cholera_probability": results["cholera"]["probability"],
+                "typhoid_probability": results["typhoid"]["probability"],
+                "dysentery_probability": results["dysentery"]["probability"],
+                "hepatitis_a_probability": results["hepatitis_a"]["probability"],
+            }
+            save_history(record)
+
+        except Exception as e:
+            st.error(f"{t['prediction_failed']}: {e}")
+
+def preprocess_batch(df, assets):
+    encoders = assets["encoders"]
+    features = assets["features"]
+
+    required = [
+        "state", "location_type", "water_source", "season",
+        "ph", "turbidity_ntu", "tds_mg_l", "dissolved_oxygen_mg_l", "bod_mg_l",
+        "fecal_coliform_mpn", "total_coliform_mpn", "nitrate_mg_l", "fluoride_mg_l",
+        "chloride_mg_l", "hardness_mg_l", "temperature_c", "arsenic_ug_l",
+        "iron_mg_l", "population_served", "sanitation_access_percent"
+    ]
+
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing columns: {missing}")
+
+    out = df.copy()
+    for col in ["state", "location_type", "water_source", "season"]:
+        mapping = {cls: idx for idx, cls in enumerate(encoders[col].classes_)}
+        if not out[col].isin(mapping.keys()).all():
+            bad = out.loc[~out[col].isin(mapping.keys()), col].unique().tolist()
+            raise ValueError(f"Unknown values in {col}: {bad}")
+        out[f"{col}_encoded"] = out[col].map(mapping)
+
+    prepared = out.reindex(columns=features, fill_value=0)
+    return prepared, out
+
+def show_batch_analysis(assets, t):
+    render_header(t)
+    st.markdown(f'<div class="section-title">{t["batch"]}</div>', unsafe_allow_html=True)
+
+    uploaded = st.file_uploader(t["upload_csv"], type=["csv"])
+
+    with st.expander(t["required_cols"]):
+        st.code(
+            "state,location_type,water_source,season,ph,turbidity_ntu,tds_mg_l,"
+            "dissolved_oxygen_mg_l,bod_mg_l,fecal_coliform_mpn,total_coliform_mpn,"
+            "nitrate_mg_l,fluoride_mg_l,chloride_mg_l,hardness_mg_l,temperature_c,"
+            "arsenic_ug_l,iron_mg_l,population_served,sanitation_access_percent"
+        )
+
+    if uploaded is not None:
+        try:
+            df = pd.read_csv(uploaded)
+            st.dataframe(df.head(), use_container_width=True)
+
+            if st.button(t["run_batch"], use_container_width=True):
+                prepared, original = preprocess_batch(df, assets)
+                models = assets["models"]
+                scalers = assets["scalers"]
+
+                results_df = original.copy()
+
+                for disease, model in models.items():
+                    scaler = scalers[disease]
+                    scaled = scaler.transform(prepared)
+                    preds = model.predict(scaled)
+                    probs = model.predict_proba(scaled)[:, 1] if hasattr(model, "predict_proba") else preds
+                    results_df[f"{disease}_prediction"] = preds
+                    results_df[f"{disease}_probability"] = probs
+
+                results_df["overall_risk_label"] = results_df["overall_probability"].apply(lambda x: get_risk(x)[0])
+
+                st.dataframe(results_df, use_container_width=True)
+
+                summary_df = pd.DataFrame({
+                    "Category": ["High Risk", "Moderate Risk", "Low Risk"],
+                    "Count": [
+                        int((results_df["overall_probability"] >= 0.70).sum()),
+                        int(((results_df["overall_probability"] >= 0.35) & (results_df["overall_probability"] < 0.70)).sum()),
+                        int((results_df["overall_probability"] < 0.35).sum()),
+                    ]
+                })
+
+                st.markdown(f'<div class="section-title">{t["batch_summary"]}</div>', unsafe_allow_html=True)
+                st.plotly_chart(build_batch_pie(summary_df), use_container_width=True)
+
+                csv = results_df.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    t["download_csv"],
+                    data=csv,
+                    file_name="batch_prediction_results.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
+
+        except Exception as e:
+            st.error(f"{t['batch_failed']}: {e}")
+
+def show_live_analytics(assets, t):
+    render_header(t)
+    history = load_history()
+    if not history:
+        st.info(t["no_history"])
+        return
+
+    df = pd.DataFrame(history)
+    avg_risk = df["overall_probability"].mean() * 100 if "overall_probability" in df.columns else 0
+    high_alerts = int((df["overall_probability"] >= 0.70).sum()) if "overall_probability" in df.columns else 0
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        animated_counter("📊 Avg Overall Risk", f"{avg_risk:.1f}", "%")
+    with c2:
+        animated_counter("🚨 High Alerts", high_alerts)
+    with c3:
+        animated_counter("🧪 Records", len(df))
+
+    if "ui_state" in df.columns:
+        st.markdown('<div class="section-title">🌍 State-wise Test Count</div>', unsafe_allow_html=True)
+        fig = px.histogram(df, x="ui_state", color="ui_state", color_discrete_sequence=px.colors.qualitative.Bold)
+        fig.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(255,255,255,0.65)",
+            font=dict(color="#0f172a"),
+            showlegend=False,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    if "season" in df.columns and "overall_probability" in df.columns:
+        st.markdown('<div class="section-title">🌦️ Season vs Average Risk</div>', unsafe_allow_html=True)
+        season_df = df.groupby("season", as_index=False)["overall_probability"].mean()
+        season_df["overall_probability"] *= 100
+        sfig = px.bar(
+            season_df,
+            x="season",
+            y="overall_probability",
+            color="season",
+            color_discrete_sequence=px.colors.qualitative.Vivid,
+        )
+        sfig.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(255,255,255,0.65)",
+            font=dict(color="#0f172a"),
+            showlegend=False,
+        )
+        st.plotly_chart(sfig, use_container_width=True)
+
+    trend = build_history_trend(history, t)
+    if trend:
+        st.plotly_chart(trend, use_container_width=True)
+
+def show_history(t):
+    render_header(t)
+    history = load_history()
+    if not history:
+        st.info(t["no_history"])
+        return
+
+    df = pd.DataFrame(history)
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
+        sel_state = st.selectbox("Filter by State", ["All"] + sorted(df["ui_state"].dropna().unique().tolist())) if "ui_state" in df.columns else "All"
+    with c2:
+        sel_season = st.selectbox("Filter by Season", ["All"] + sorted(df["season"].dropna().unique().tolist())) if "season" in df.columns else "All"
+    with c3:
+        sel_risk = st.selectbox("Filter by Risk", ["All"] + sorted(df["risk_label"].dropna().unique().tolist())) if "risk_label" in df.columns else "All"
+
+    filtered = df.copy()
+    if sel_state != "All":
+        filtered = filtered[filtered["ui_state"] == sel_state]
+    if sel_season != "All":
+        filtered = filtered[filtered["season"] == sel_season]
+    if sel_risk != "All":
+        filtered = filtered[filtered["risk_label"] == sel_risk]
+
+    if "overall_probability" in filtered.columns:
+        filtered["overall_probability"] = filtered["overall_probability"].apply(lambda x: f"{x*100:.2f}%")
+
+    st.dataframe(filtered, use_container_width=True, hide_index=True)
+
+    if st.button(t["clear_history"]):
+        with open(HISTORY_FILE, "w") as f:
+            json.dump([], f)
+        st.success("History cleared successfully.")
+        st.rerun()
+
+def show_awareness_bot(t):
+    render_header(t)
+    st.markdown(f'<div class="section-title">{t["bot_title"]}</div>', unsafe_allow_html=True)
+    st.write(t["bot_desc"])
+
+    left, right = st.columns([2.2, 1])
+
+    with left:
+        try:
+            components.iframe(
+                "https://water-bot-nine.vercel.app/",
+                height=720,
+                scrolling=True
+            )
+        except Exception:
+            st.warning(t["bot_embed_note"])
+
+    with right:
+        advisory_card(
+            "💧 Bot Purpose",
+            t["bot_desc"],
+            "green"
+        )
+        advisory_card(
+            "❓ Suggested Questions",
+            f'{t["bot_tip_1"]}\n\n{t["bot_tip_2"]}\n\n{t["bot_tip_3"]}',
+            "yellow"
+        )
+
+        st.link_button(
+            t["bot_open"],
+            "https://water-bot-nine.vercel.app/",
+            use_container_width=True
+        )
+
+        st.info(t["bot_embed_note"])
+
+def show_about(assets, t):
+    render_header(t)
+    st.markdown('<div class="section-title">About AquaShield India Premium</div>', unsafe_allow_html=True)
+    st.write(
+        """
+        AquaShield India Premium is an AI-based water disease prediction and monitoring dashboard.
+        It combines disease prediction, colorful analytics, gauge-based risk visualization,
+        health advisory cards, PDF reports, batch analysis, multilingual interface, integrated
+        awareness chatbot, and India-ready state selection with Maharashtra district support.
+        """
+    )
+    st.json(assets["metadata"])
+
+def show_deploy_guide(t):
+    render_header(t)
+    st.markdown(
+        f"""
+        <div class="deploy-box">
+            <h3 style="margin-top:0;">🚀 Deployment Guide</h3>
+            <p>{t["deploy_text"]}</p>
+            <p><b>Steps:</b></p>
+            <p>1. Create a GitHub repository</p>
+            <p>2. Upload app.py, models folder, requirements.txt</p>
+            <p>3. Open Streamlit Community Cloud</p>
+            <p>4. Connect GitHub repo</p>
+            <p>5. Select app.py and deploy</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.code("pip install -r requirements.txt\nstreamlit run app.py")
+
+# =========================================================
+# MAIN
+# =========================================================
 def main():
-    models, scalers, features, encoders, metadata, loaded = load_all_models()
-
-    if not loaded:
-        st.error("❌ **Models not found!**")
-        st.info("Please run: `python train_models.py`")
-        st.stop()
-
-    # Header
-    st.markdown(
-        '<h1 class="main-header">💧 Water-Borne Disease Early Warning System</h1>',
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        "<p style='text-align: center; font-size: 1.2rem; color: #666;'>Smart Community Health Monitoring • Northeast India</p>",
-        unsafe_allow_html=True,
-    )
-    st.markdown("---")
-
-    # Sidebar
     with st.sidebar:
-        st.image("https://img.icons8.com/fluency/96/water.png", width=80)
-        st.markdown("## 📋 Navigation")
+        lang = st.selectbox("🌐 Language / भाषा / Language", ["English", "Marathi", "Hindi"])
+        t = TEXTS[lang]
 
+    show_splash_once(t)
+    assets = load_assets()
+
+    with st.sidebar:
+        st.markdown(f"## {t['navigation']}")
         page = st.radio(
             "",
             [
-                "🏠 Dashboard",
-                "🔬 Water Quality Test",
-                "📊 Batch Analysis",
-                "📈 Model Performance",
-                "📜 Test History",
-                "ℹ️ About System",
+                t["dashboard"],
+                t["test"],
+                t["batch"],
+                t["analytics"],
+                t["history"],
+                t["bot"],
+                t["about"],
+                t["deploy"],
             ],
-            label_visibility="collapsed",
         )
 
         st.markdown("---")
-        st.markdown("### 📊 System Stats")
-        st.metric("Total Tests", len(st.session_state.test_history))
-        st.metric(
-            "Active Alerts",
-            len([a for a in st.session_state.alerts if a.get("active", True)]),
-        )
+        st.markdown(f"### 📊 {t['stats']}")
+        history = load_history()
+        st.metric(t["total_tests"], len(history))
+        st.metric(t["alerts"], sum(1 for x in history if x.get("overall_probability", 0) >= 0.70))
 
-        # Display model accuracy
-        if metadata and "results" in metadata:
-            st.markdown("---")
-            st.markdown("### 🎯 Model Accuracy")
-            for result in metadata["results"]:
-                if result["Disease"] == "Overall":
-                    st.metric(
-                        result["Disease"],
-                        f"{result['Accuracy'] * 100:.1f}%",
-                        delta=f"F1: {result['F1-Score'] * 100:.1f}%",
-                    )
+        if assets and assets.get("metadata", {}).get("results"):
+            overall_acc = 0
+            for row in assets["metadata"]["results"]:
+                if row.get("Disease", "").lower() == "overall":
+                    overall_acc = row.get("Accuracy", 0)
+                    break
+            st.metric(t["accuracy"], f"{overall_acc*100:.1f}%")
 
         st.markdown("---")
-        st.success(f"📅 {datetime.now().strftime('%d %B %Y')}")
-        st.info("🕐 " + datetime.now().strftime("%I:%M %p"))
-
-    # Route pages
-    if page == "🏠 Dashboard":
-        show_dashboard(metadata)
-    elif page == "🔬 Water Quality Test":
-        show_water_test(models, scalers, features, encoders)
-    elif page == "📊 Batch Analysis":
-        show_batch_analysis(models, scalers, features, encoders)
-    elif page == "📈 Model Performance":
-        show_model_performance(metadata)
-    elif page == "📜 Test History":
-        show_test_history()
-    elif page == "ℹ️ About System":
-        show_about(metadata)
-
-
-# ============================================================================
-# PAGE: DASHBOARD
-# ============================================================================
-def show_dashboard(metadata):
-    st.markdown("## 🏠 System Overview")
-
-    col1, col2, col3, col4 = st.columns(4)
-
-    with col1:
         st.markdown(
-            """
-        <div class="metric-card">
-            <h3 style="color: #0066cc;">💧</h3>
-            <h4>Water Quality</h4>
-            <p>Real-time monitoring</p>
-        </div>
-        """,
+            '<div class="small-note">Premium UI • Bot Added • Traffic Light • Water Safety Score • Maharashtra Districts • Gauge Risk • PDF Export</div>',
             unsafe_allow_html=True,
         )
 
-    with col2:
-        st.markdown(
-            """
-        <div class="metric-card">
-            <h3 style="color: #00cc99;">🦠</h3>
-            <h4>4 Diseases</h4>
-            <p>AI prediction models</p>
-        </div>
-        """,
-            unsafe_allow_html=True,
-        )
-
-    with col3:
-        st.markdown(
-            """
-        <div class="metric-card">
-            <h3 style="color: #ff9800;">🚨</h3>
-            <h4>Early Warning</h4>
-            <p>Outbreak detection</p>
-        </div>
-        """,
-            unsafe_allow_html=True,
-        )
-
-    with col4:
-        st.markdown(
-            """
-        <div class="metric-card">
-            <h3 style="color: #e91e63;">🌏</h3>
-            <h4>NE India</h4>
-            <p>7 states covered</p>
-        </div>
-        """,
-            unsafe_allow_html=True,
-        )
-
-    st.markdown("---")
-
-    # Disease information cards
-    st.markdown("## 🦠 Monitored Water-Borne Diseases")
-
-    col1, col2 = st.columns(2)
-
-    for idx, (disease_key, disease_info) in enumerate(DISEASES.items()):
-        with col1 if idx % 2 == 0 else col2:
-            st.markdown(
-                f"""
-            <div style="background: {disease_info["color"]}10; padding: 1.5rem; border-radius: 10px;
-                       border-left: 4px solid {disease_info["color"]}; margin: 0.5rem 0;">
-                <h3 style="color: {disease_info["color"]}; margin: 0;">{disease_info["name"]}</h3>
-                <p style="margin: 0.5rem 0 0 0;"><strong>{disease_info["description"]}</strong></p>
-                <p style="margin: 0.3rem 0; font-size: 0.9rem; color: #666;"><strong>Symptoms:</strong> {disease_info["symptoms"]}</p>
-                <p style="margin: 0.3rem 0; font-size: 0.9rem; color: #666;"><strong>Prevention:</strong> {disease_info["prevention"]}</p>
-            </div>
-            """,
-                unsafe_allow_html=True,
-            )
-
-    st.markdown("---")
-
-    # System accuracy
-    if metadata and "results" in metadata:
-        st.markdown("## 🎯 System Performance")
-
-        results_df = pd.DataFrame(metadata["results"])
-
-        col1, col2 = st.columns([2, 1])
-
-        with col1:
-            # Bar chart
-            fig = go.Figure()
-            fig.add_trace(
-                go.Bar(
-                    name="Accuracy",
-                    x=results_df["Disease"],
-                    y=results_df["Accuracy"] * 100,
-                    marker_color="#0066cc",
-                )
-            )
-            fig.add_trace(
-                go.Bar(
-                    name="F1-Score",
-                    x=results_df["Disease"],
-                    y=results_df["F1-Score"] * 100,
-                    marker_color="#00cc99",
-                )
-            )
-            fig.update_layout(
-                title="Model Performance by Disease",
-                xaxis_title="Disease",
-                yaxis_title="Score (%)",
-                barmode="group",
-                height=400,
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-        with col2:
-            st.markdown("### 📊 Metrics")
-            for result in results_df.to_dict("records"):
-                st.metric(
-                    result["Disease"],
-                    f"{result['Accuracy'] * 100:.1f}%",
-                    delta=f"F1: {result['F1-Score'] * 100:.1f}%",
-                )
-
-    st.markdown("---")
-    st.info(
-        "👈 **Click 'Water Quality Test'** in the sidebar to start testing water samples!"
-    )
-
-
-# ============================================================================
-# PAGE: WATER QUALITY TEST (MAIN FEATURE)
-# ============================================================================
-def show_water_test(models, scalers, features, encoders):
-    st.markdown("## 🔬 Water Quality Test & Disease Risk Assessment")
-
-    st.info("""
-    **📋 Instructions:** Enter water quality test results below. The system will analyze the data and
-    predict outbreak risk for 4 waterborne diseases using AI/ML models.
-    """)
-
-    with st.form("water_test_form"):
-        st.markdown("### 📍 Sample Information")
-
-        col1, col2, col3 = st.columns(3)
-
-        with col1:
-            state = st.selectbox(
-                "State",
-                [
-                    "Assam",
-                    "Meghalaya",
-                    "Tripura",
-                    "Nagaland",
-                    "Manipur",
-                    "Mizoram",
-                    "Arunachal Pradesh",
-                ],
-            )
-            location = st.selectbox("Location Type", ["Rural", "Urban"])
-
-        with col2:
-            source = st.selectbox(
-                "Water Source",
-                ["River", "Stream", "Well", "Hand Pump", "Pond", "Spring"],
-            )
-            season = st.selectbox(
-                "Season", ["Monsoon", "Pre-Monsoon", "Post-Monsoon", "Winter"]
-            )
-
-        with col3:
-            population = st.selectbox(
-                "Population Served", [50, 100, 200, 500, 1000, 2000]
-            )
-            sanitation = st.slider("Sanitation Access (%)", 0, 100, 60, 10)
-
-        st.markdown("---")
-        st.markdown("### 🧪 Water Quality Parameters")
-
-        tab1, tab2, tab3 = st.tabs(
-            ["Basic Parameters", "Chemical Tests", "Biological Tests"]
-        )
-
-        with tab1:
-            col1, col2, col3 = st.columns(3)
-
-            with col1:
-                ph = st.number_input(
-                    "pH", 5.0, 9.0, 7.0, 0.1, help="WHO: 6.5-8.5 optimal"
-                )
-                turbidity = st.number_input(
-                    "Turbidity (NTU)", 0.0, 120.0, 5.0, 0.5, help="India: <10 NTU"
-                )
-
-            with col2:
-                tds = st.number_input(
-                    "TDS (mg/L)", 50.0, 1200.0, 300.0, 10.0, help="India: <500 mg/L"
-                )
-                do = st.number_input(
-                    "Dissolved Oxygen (mg/L)", 1.0, 12.0, 6.5, 0.1, help="Good: >5 mg/L"
-                )
-
-            with col3:
-                bod = st.number_input(
-                    "BOD (mg/L)", 0.5, 18.0, 2.0, 0.1, help="Good: <3 mg/L"
-                )
-                temp = st.number_input("Temperature (°C)", 14.0, 33.0, 25.0, 0.5)
-
-        with tab2:
-            col1, col2, col3 = st.columns(3)
-
-            with col1:
-                nitrate = st.number_input(
-                    "Nitrate (mg/L)", 0.0, 60.0, 10.0, 0.5, help="WHO: <50 mg/L"
-                )
-                fluoride = st.number_input(
-                    "Fluoride (mg/L)", 0.0, 3.5, 0.5, 0.1, help="India: <1.0 mg/L"
-                )
-
-            with col2:
-                chloride = st.number_input(
-                    "Chloride (mg/L)", 5.0, 220.0, 30.0, 1.0, help="WHO: <250 mg/L"
-                )
-                hardness = st.number_input(
-                    "Hardness (mg/L)", 15.0, 280.0, 95.0, 5.0, help="Soft: <60 mg/L"
-                )
-
-            with col3:
-                arsenic = st.number_input(
-                    "Arsenic (μg/L)", 0.0, 150.0, 5.0, 0.5, help="WHO: <10 μg/L"
-                )
-                iron = st.number_input(
-                    "Iron (mg/L)", 0.0, 4.0, 0.3, 0.05, help="India: <0.3 mg/L"
-                )
-
-        with tab3:
-            col1, col2 = st.columns(2)
-
-            with col1:
-                fecal = st.number_input(
-                    "Fecal Coliform (MPN/100ml)",
-                    0.0,
-                    800.0,
-                    10.0,
-                    1.0,
-                    help="India: <10 MPN/100ml - Critical parameter",
-                )
-
-            with col2:
-                total_col = st.number_input(
-                    "Total Coliform (MPN/100ml)",
-                    0.0,
-                    2000.0,
-                    50.0,
-                    5.0,
-                    help="Should be minimal",
-                )
-
-        submitted = st.form_submit_button(
-            "🔍 Analyze Water Quality & Predict Disease Risk", use_container_width=True
-        )
-
-    if submitted:
-        # Prepare test data
-        test_params = {
-            "ph": ph,
-            "turbidity_ntu": turbidity,
-            "tds_mg_l": tds,
-            "dissolved_oxygen_mg_l": do,
-            "bod_mg_l": bod,
-            "fecal_coliform_mpn": fecal,
-            "total_coliform_mpn": total_col,
-            "nitrate_mg_l": nitrate,
-            "fluoride_mg_l": fluoride,
-            "chloride_mg_l": chloride,
-            "hardness_mg_l": hardness,
-            "temperature_c": temp,
-            "arsenic_ug_l": arsenic,
-            "iron_mg_l": iron,
-            "population_served": population,
-            "sanitation_access_percent": sanitation,
-        }
-
-        # Encode categorical
-        input_encoded = {
-            "state_encoded": encoders["state"].transform([state])[0],
-            "location_type_encoded": encoders["location_type"].transform([location])[0],
-            "water_source_encoded": encoders["water_source"].transform([source])[0],
-            "season_encoded": encoders["season"].transform([season])[0],
-        }
-
-        # Create input dataframe
-        input_data = pd.DataFrame([{**input_encoded, **test_params}])[features]
-
-        # Predict all diseases
-        disease_predictions = {}
-
-        for disease_key in ["cholera", "typhoid", "dysentery", "hepatitis_a"]:
-            scaled = scalers[disease_key].transform(input_data)
-            pred = models[disease_key].predict(scaled)[0]
-            prob = models[disease_key].predict_proba(scaled)[0]
-            disease_predictions[disease_key] = {"risk": pred, "score": prob[1] * 100}
-
-        # Overall prediction
-        overall_scaled = scalers["overall"].transform(input_data)
-        overall_pred = models["overall"].predict(overall_scaled)[0]
-        overall_prob = models["overall"].predict_proba(overall_scaled)[0]
-        overall_risk = overall_prob[1] * 100
-
-        # Water quality assessment
-        quality_status, quality_color, quality_msg = get_water_quality_status(
-            test_params
-        )
-
-        # Save to history
-        st.session_state.test_history.append(
-            {
-                "timestamp": datetime.now(),
-                "state": state,
-                "water_source": source,
-                "overall_risk": overall_risk,
-                "status": quality_status,
-            }
-        )
-
-        # Check for alerts
-        high_risk_count = sum(1 for p in disease_predictions.values() if p["risk"] == 1)
-        if high_risk_count >= 2 or overall_risk > 70:
-            st.session_state.alerts.append(
-                {
-                    "timestamp": datetime.now(),
-                    "location": f"{state} - {source}",
-                    "risk_level": "HIGH",
-                    "diseases": [
-                        k for k, v in disease_predictions.items() if v["risk"] == 1
-                    ],
-                    "score": overall_risk,
-                    "active": True,
-                }
-            )
-
-        # DISPLAY RESULTS
-        st.markdown("---")
-        st.markdown("## 📊 Analysis Results")
-
-        # Water quality status
-        st.markdown("### 💧 Water Quality Assessment")
-        if quality_status == "SAFE":
-            st.success(quality_msg)
-        elif quality_status == "MODERATE":
-            st.warning(quality_msg)
-        else:
-            st.error(quality_msg)
-
-        # Overall risk
-        st.markdown("---")
-        st.markdown("### 🎯 Overall Disease Outbreak Risk")
-
-        col1, col2 = st.columns([2, 1])
-
-        with col1:
-            if overall_pred == 1:
-                st.markdown(
-                    f"""
-                <div class="alert-high">
-                    <h2 style="color: #d32f2f; margin: 0;">🚨 HIGH OUTBREAK RISK DETECTED</h2>
-                    <h1 style="color: #d32f2f; margin: 0.5rem 0;">Risk Score: {overall_risk:.1f}%</h1>
-                    <p style="font-size: 1.1rem; margin: 0;">Immediate intervention required for this water source!</p>
-                </div>
-                """,
-                    unsafe_allow_html=True,
-                )
-            else:
-                st.markdown(
-                    f"""
-                <div class="alert-low">
-                    <h2 style="color: #388e3c; margin: 0;">✅ LOW OUTBREAK RISK</h2>
-                    <h1 style="color: #388e3c; margin: 0.5rem 0;">Risk Score: {overall_risk:.1f}%</h1>
-                    <p style="font-size: 1.1rem; margin: 0;">Continue regular monitoring of water quality</p>
-                </div>
-                """,
-                    unsafe_allow_html=True,
-                )
-
-        with col2:
-            st.plotly_chart(create_gauge(overall_risk), use_container_width=True)
-
-        # Individual disease risks
-        st.markdown("---")
-        st.markdown("### 🦠 Disease-Specific Risk Assessment")
-
-        col1, col2 = st.columns(2)
-
-        for idx, (disease_key, disease_info) in enumerate(DISEASES.items()):
-            pred_data = disease_predictions[disease_key]
-            is_high = pred_data["risk"] == 1
-            score = pred_data["score"]
-
-            with col1 if idx % 2 == 0 else col2:
-                status = "HIGH RISK" if is_high else "LOW RISK"
-                bg_color = f"{disease_info['color']}15" if is_high else "#4caf5010"
-                border_color = disease_info["color"] if is_high else "#4caf50"
-
-                st.markdown(
-                    f"""
-                <div style="background: {bg_color}; padding: 1.2rem; border-radius: 8px;
-                           border-left: 4px solid {border_color}; margin: 0.5rem 0;">
-                    <h4 style="color: {border_color}; margin: 0;">{disease_info["name"]}</h4>
-                    <h3 style="color: {border_color}; margin: 0.3rem 0;">{status}</h3>
-                    <p style="margin: 0; font-size: 1.1rem;"><strong>Risk Score: {score:.1f}%</strong></p>
-                </div>
-                """,
-                    unsafe_allow_html=True,
-                )
-
-        # Recommendations
-        st.markdown("---")
-        st.markdown("### 💡 Recommended Actions")
-
-        if high_risk_count >= 2:
-            st.error(f"""
-            **🚨 URGENT: Multiple Disease Risks Detected ({high_risk_count} diseases)**
-
-            **Immediate Actions Required:**
-            1. 🚫 **STOP using this water source immediately**
-            2. 📢 Alert all community members and local health authorities
-            3. 🏥 Set up medical screening camps for early symptom detection
-            4. 💧 Arrange alternate safe water supply (tankers/packaged water)
-            5. 🧪 Conduct comprehensive water quality re-testing
-            6. 🛡️ Implement emergency water treatment (boiling/chlorination)
-            7. 📋 Monitor community for disease symptoms daily
-            8. 🏗️ Investigate and repair water source contamination
-            """)
-        elif high_risk_count == 1:
-            high_disease = [
-                DISEASES[k]["name"]
-                for k, v in disease_predictions.items()
-                if v["risk"] == 1
-            ][0]
-            st.warning(f"""
-            **⚠️ Single Disease Risk Detected: {high_disease}**
-
-            **Recommended Actions:**
-            1. 💧 **Boil all water** for drinking and cooking (minimum 1 minute)
-            2. 🧪 Conduct follow-up water testing within 48 hours
-            3. 📢 Inform community members about the risk
-            4. 🏥 Monitor for symptoms: {next(v["symptoms"] for k, v in DISEASES.items() if DISEASES[k]["name"] == high_disease)}
-            5. 🛠️ Improve water treatment and sanitation facilities
-            6. 📊 Increase testing frequency to weekly
-            """)
-        else:
-            st.success("""
-            **✅ All Disease Risks Are Low**
-
-            **Maintenance Actions:**
-            1. ✅ Continue regular water quality testing (monthly minimum)
-            2. 🧹 Maintain cleanliness around water source
-            3. 📊 Keep detailed records of all test results
-            4. 🏥 Conduct periodic community health screenings
-            5. 📚 Provide hygiene education to community members
-            6. 🔍 Watch for seasonal changes affecting water quality
-            """)
-
-        # Parameter analysis
-        st.markdown("---")
-        st.markdown("### 📊 Parameter Analysis")
-
-        param_analysis = []
-
-        if ph < 6.5:
-            param_analysis.append(("pH", f"{ph:.1f}", "Too acidic", "🔴"))
-        elif ph > 8.5:
-            param_analysis.append(("pH", f"{ph:.1f}", "Too alkaline", "🔴"))
-        else:
-            param_analysis.append(("pH", f"{ph:.1f}", "Normal range", "🟢"))
-
-        if turbidity > 10:
-            param_analysis.append(
-                ("Turbidity", f"{turbidity:.1f} NTU", "Exceeds limit", "🔴")
-            )
-        else:
-            param_analysis.append(
-                ("Turbidity", f"{turbidity:.1f} NTU", "Within limit", "🟢")
-            )
-
-        if fecal > 10:
-            param_analysis.append(
-                ("Fecal Coliform", f"{fecal:.0f} MPN", "Contaminated", "🔴")
-            )
-        else:
-            param_analysis.append(("Fecal Coliform", f"{fecal:.0f} MPN", "Safe", "🟢"))
-
-        if do < 5:
-            param_analysis.append(("Dissolved Oxygen", f"{do:.1f} mg/L", "Low", "🔴"))
-        else:
-            param_analysis.append(("Dissolved Oxygen", f"{do:.1f} mg/L", "Good", "🟢"))
-
-        if arsenic > 10:
-            param_analysis.append(
-                ("Arsenic", f"{arsenic:.1f} μg/L", "Exceeds limit", "🔴")
-            )
-        else:
-            param_analysis.append(("Arsenic", f"{arsenic:.1f} μg/L", "Safe", "🟢"))
-
-        col1, col2, col3, col4 = st.columns(4)
-
-        for idx, (param, value, status, icon) in enumerate(param_analysis):
-            with [col1, col2, col3, col4][idx % 4]:
-                st.markdown(
-                    f"""
-                <div class="metric-card">
-                    <h2 style="margin: 0;">{icon}</h2>
-                    <h4 style="margin: 0.5rem 0;">{param}</h4>
-                    <p style="margin: 0; font-size: 1.1rem;"><strong>{value}</strong></p>
-                    <p style="margin: 0.3rem 0; font-size: 0.9rem; color: #666;">{status}</p>
-                </div>
-                """,
-                    unsafe_allow_html=True,
-                )
-
-
-# ============================================================================
-# PAGE: BATCH ANALYSIS
-# ============================================================================
-def show_batch_analysis(models, scalers, features, encoders):
-    st.markdown("## 📊 Batch Water Quality Analysis")
-
-    st.info("""
-    **📋 Upload CSV file** with water quality data for multiple samples.
-    The system will process all records and provide comprehensive analysis.
-    """)
-
-    st.markdown("### 📥 Required CSV Format")
-    st.write("Your CSV should contain these columns:")
-
-    required_cols = [
-        "state",
-        "location_type",
-        "water_source",
-        "season",
-        "ph",
-        "turbidity_ntu",
-        "tds_mg_l",
-        "dissolved_oxygen_mg_l",
-        "bod_mg_l",
-        "fecal_coliform_mpn",
-        "total_coliform_mpn",
-        "nitrate_mg_l",
-        "fluoride_mg_l",
-        "chloride_mg_l",
-        "hardness_mg_l",
-        "temperature_c",
-        "arsenic_ug_l",
-        "iron_mg_l",
-        "population_served",
-        "sanitation_access_percent",
-    ]
-
-    st.code(", ".join(required_cols), language="text")
-
-    uploaded_file = st.file_uploader("📂 Upload CSV File", type=["csv"])
-
-    if uploaded_file:
-        try:
-            df = pd.read_csv(uploaded_file)
-
-            st.success(f"✅ Loaded {len(df)} water samples")
-
-            with st.expander("👁️ Preview Data (First 10 rows)", expanded=True):
-                st.dataframe(df.head(10), use_container_width=True)
-
-            # Check columns
-            missing = set(required_cols) - set(df.columns)
-
-            if missing:
-                st.error(f"❌ Missing columns: {', '.join(missing)}")
-            else:
-                if st.button("🔬 Analyze All Samples", use_container_width=True):
-                    with st.spinner("Processing all water samples..."):
-                        # Encode categorical variables
-                        for col in ["state", "location_type", "water_source", "season"]:
-                            df[f"{col}_encoded"] = encoders[col].transform(df[col])
-
-                        # Prepare features
-                        X = df[features]
-
-                        # Predict for all diseases
-                        for disease in [
-                            "cholera",
-                            "typhoid",
-                            "dysentery",
-                            "hepatitis_a",
-                            "overall",
-                        ]:
-                            scaled = scalers[disease].transform(X)
-                            preds = models[disease].predict(scaled)
-                            probs = models[disease].predict_proba(scaled)
-
-                            df[f"{disease}_risk"] = [
-                                "High" if p == 1 else "Low" for p in preds
-                            ]
-                            df[f"{disease}_score"] = [prob[1] * 100 for prob in probs]
-
-                        st.success("✅ Analysis complete!")
-
-                        # Summary
-                        st.markdown("### 📊 Summary Statistics")
-
-                        col1, col2, col3, col4, col5 = st.columns(5)
-
-                        with col1:
-                            st.metric("Total Samples", len(df))
-                        with col2:
-                            cholera_high = (df["cholera_risk"] == "High").sum()
-                            st.metric(
-                                "Cholera Risk",
-                                cholera_high,
-                                f"{cholera_high / len(df) * 100:.1f}%",
-                            )
-                        with col3:
-                            typhoid_high = (df["typhoid_risk"] == "High").sum()
-                            st.metric(
-                                "Typhoid Risk",
-                                typhoid_high,
-                                f"{typhoid_high / len(df) * 100:.1f}%",
-                            )
-                        with col4:
-                            dysentery_high = (df["dysentery_risk"] == "High").sum()
-                            st.metric(
-                                "Dysentery Risk",
-                                dysentery_high,
-                                f"{dysentery_high / len(df) * 100:.1f}%",
-                            )
-                        with col5:
-                            hepatitis_high = (df["hepatitis_a_risk"] == "High").sum()
-                            st.metric(
-                                "Hepatitis A Risk",
-                                hepatitis_high,
-                                f"{hepatitis_high / len(df) * 100:.1f}%",
-                            )
-
-                        # Results table
-                        st.markdown("### 📋 Detailed Results")
-                        st.dataframe(df, use_container_width=True)
-
-                        # Visualizations
-                        st.markdown("### 📈 Risk Analysis Charts")
-
-                        col1, col2 = st.columns(2)
-
-                        with col1:
-                            # Overall risk pie chart
-                            overall_counts = df["overall_risk"].value_counts()
-                            fig = px.pie(
-                                values=overall_counts.values,
-                                names=overall_counts.index,
-                                title="Overall Risk Distribution",
-                                color=overall_counts.index,
-                                color_discrete_map={
-                                    "High": "#f44336",
-                                    "Low": "#4caf50",
-                                },
-                            )
-                            st.plotly_chart(fig, use_container_width=True)
-
-                        with col2:
-                            # Disease-wise comparison
-                            disease_high = {
-                                "Cholera": cholera_high,
-                                "Typhoid": typhoid_high,
-                                "Dysentery": dysentery_high,
-                                "Hepatitis A": hepatitis_high,
-                            }
-                            fig = px.bar(
-                                x=list(disease_high.keys()),
-                                y=list(disease_high.values()),
-                                title="High-Risk Cases by Disease",
-                                labels={"x": "Disease", "y": "Number of Cases"},
-                                color=list(disease_high.values()),
-                                color_continuous_scale="Reds",
-                            )
-                            st.plotly_chart(fig, use_container_width=True)
-
-                        # Download results
-                        st.markdown("### 📥 Download Results")
-
-                        csv = df.to_csv(index=False).encode("utf-8")
-                        st.download_button(
-                            "📄 Download Full Results CSV",
-                            csv,
-                            f"water_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                            "text/csv",
-                            use_container_width=True,
-                        )
-
-        except Exception as e:
-            st.error(f"Error processing file: {str(e)}")
-
-
-# ============================================================================
-# PAGE: MODEL PERFORMANCE
-# ============================================================================
-def show_model_performance(metadata):
-    st.markdown("## 📈 Model Performance & Accuracy")
-
-    if not metadata or "results" not in metadata:
-        st.warning("No performance data available")
+    if assets is None:
+        show_missing_models(t)
         return
 
-    results_df = pd.DataFrame(metadata["results"])
+    if page == t["dashboard"]:
+        show_dashboard(assets, t)
+    elif page == t["test"]:
+        show_water_test(assets, t)
+    elif page == t["batch"]:
+        show_batch_analysis(assets, t)
+    elif page == t["analytics"]:
+        show_live_analytics(assets, t)
+    elif page == t["history"]:
+        show_history(t)
+    elif page == t["bot"]:
+        show_awareness_bot(t)
+    elif page == t["about"]:
+        show_about(assets, t)
+    elif page == t["deploy"]:
+        show_deploy_guide(t)
 
-    # Overall statistics
-    st.markdown("### 📊 Overall Performance Metrics")
-
-    col1, col2, col3, col4, col5 = st.columns(5)
-
-    avg_acc = results_df["Accuracy"].mean()
-    avg_prec = results_df["Precision"].mean()
-    avg_rec = results_df["Recall"].mean()
-    avg_f1 = results_df["F1-Score"].mean()
-    avg_auc = results_df["ROC-AUC"].mean()
-
-    with col1:
-        st.metric("Avg Accuracy", f"{avg_acc * 100:.2f}%")
-    with col2:
-        st.metric("Avg Precision", f"{avg_prec * 100:.2f}%")
-    with col3:
-        st.metric("Avg Recall", f"{avg_rec * 100:.2f}%")
-    with col4:
-        st.metric("Avg F1-Score", f"{avg_f1 * 100:.2f}%")
-    with col5:
-        st.metric("Avg ROC-AUC", f"{avg_auc:.3f}")
-
-    # Performance table
-    st.markdown("### 📋 Detailed Performance by Disease")
-
-    display_df = results_df.copy()
-    for col in ["Accuracy", "Precision", "Recall", "F1-Score"]:
-        display_df[col] = display_df[col].apply(lambda x: f"{x * 100:.2f}%")
-    display_df["ROC-AUC"] = display_df["ROC-AUC"].apply(lambda x: f"{x:.4f}")
-
-    st.dataframe(display_df, use_container_width=True)
-
-    # Charts
-    st.markdown("### 📊 Performance Visualizations")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        # Grouped bar chart
-        fig = go.Figure()
-
-        metrics = ["Accuracy", "Precision", "Recall", "F1-Score"]
-        colors = ["#0066cc", "#00cc99", "#ff9800", "#e91e63"]
-
-        for metric, color in zip(metrics, colors):
-            fig.add_trace(
-                go.Bar(
-                    name=metric,
-                    x=results_df["Disease"],
-                    y=results_df[metric] * 100,
-                    marker_color=color,
-                )
-            )
-
-        fig.update_layout(
-            title="Model Metrics Comparison",
-            xaxis_title="Disease",
-            yaxis_title="Score (%)",
-            barmode="group",
-            height=400,
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-    with col2:
-        # ROC-AUC radar chart
-        fig = go.Figure()
-
-        fig.add_trace(
-            go.Scatterpolar(
-                r=results_df["ROC-AUC"] * 100,
-                theta=results_df["Disease"],
-                fill="toself",
-                name="ROC-AUC Score",
-            )
-        )
-
-        fig.update_layout(
-            polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
-            showlegend=True,
-            title="ROC-AUC Scores by Disease",
-            height=400,
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-    # Model info
-    st.markdown("---")
-    st.markdown("### ℹ️ Model Information")
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        st.info(f"""
-        **Model Type**
-        {metadata.get("model_type", "XGBoost Classifier")}
-        """)
-
-    with col2:
-        st.info(f"""
-        **Training Date**
-        {metadata.get("training_date", "N/A")}
-        """)
-
-    with col3:
-        st.info(f"""
-        **Dataset Size**
-        {metadata.get("dataset_size", "N/A"):,} records
-        """)
-
-
-# ============================================================================
-# PAGE: TEST HISTORY
-# ============================================================================
-def show_test_history():
-    st.markdown("## 📜 Water Quality Test History")
-
-    if not st.session_state.test_history:
-        st.info(
-            "No test history available yet. Conduct some water quality tests to see them here!"
-        )
-        return
-
-    df = pd.DataFrame(st.session_state.test_history)
-
-    st.metric("Total Tests Conducted", len(df))
-
-    # Display history
-    st.markdown("### 📊 Recent Tests")
-    st.dataframe(df.sort_values("timestamp", ascending=False), use_container_width=True)
-
-    # Analytics
-    st.markdown("### 📈 History Analytics")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        # Risk distribution
-        fig = px.histogram(
-            df,
-            x="overall_risk",
-            title="Risk Score Distribution",
-            labels={"overall_risk": "Risk Score (%)"},
-            nbins=20,
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-    with col2:
-        # State distribution
-        state_counts = df["state"].value_counts()
-        fig = px.pie(
-            values=state_counts.values, names=state_counts.index, title="Tests by State"
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-    # Clear history
-    if st.button("🗑️ Clear All History"):
-        st.session_state.test_history = []
-        st.success("History cleared!")
-        st.rerun()
-
-
-# ============================================================================
-# PAGE: ABOUT
-# ============================================================================
-def show_about(metadata):
-    st.markdown("## ℹ️ About the System")
-
-    st.markdown("""
-    ### Smart Community Health Monitoring and Early Warning System
-
-    **For Water-Borne Diseases in Rural Northeast India**
-
-    This AI-powered system helps communities monitor water quality and predict outbreak risks
-    for four major waterborne diseases affecting Northeast India.
-
-    ---
-
-    ### 🎯 Key Features
-
-    ✅ **Real-time Water Quality Analysis** - Test water samples instantly
-    ✅ **AI Disease Prediction** - Predict 4 waterborne diseases using ML
-    ✅ **Early Warning Alerts** - Get outbreak warnings before they spread
-    ✅ **Batch Processing** - Analyze multiple water samples at once
-    ✅ **Performance Tracking** - View model accuracy and metrics
-    ✅ **Test History** - Track all water quality tests over time
-
-    ---
-
-    ### 🦠 Monitored Diseases
-
-    1. **Cholera** - Acute diarrheal infection (Vibrio cholerae)
-    2. **Typhoid** - Bacterial infection (Salmonella typhi)
-    3. **Dysentery** - Intestinal inflammation causing bloody diarrhea
-    4. **Hepatitis A** - Viral liver infection
-
-    ---
-
-    ### 🛠️ Technology Stack
-
-    - **Machine Learning**: XGBoost Classifier
-    - **Frontend**: Streamlit
-    - **Data Processing**: Pandas, NumPy
-    - **Visualization**: Plotly
-    - **Class Balancing**: SMOTE
-
-    ---
-
-    ### 📊 System Performance
-    """)
-
-    if metadata and "results" in metadata:
-        results_df = pd.DataFrame(metadata["results"])
-        avg_acc = results_df["Accuracy"].mean() * 100
-
-        st.success(f"""
-        **Average Model Accuracy: {avg_acc:.2f}%**
-
-        Trained on {metadata.get("dataset_size", "N/A"):,} water quality records from Northeast India.
-        """)
-
-    st.markdown(
-        """
-    ---
-
-    ### ⚠️ Important Disclaimer
-
-    This system is designed as a **decision support tool** for community health workers and
-    water quality monitoring. It should **NOT** replace professional laboratory testing or
-    medical diagnosis.
-
-    **Always consult:**
-    - Certified water testing laboratories for official results
-    - Healthcare professionals for medical concerns
-    - Local health authorities for outbreak management
-
-    ---
-
-    ### 📧 Contact & Support
-
-    For technical support, training, or deployment assistance:
-    - Email: support@waterhealth.gov.in
-    - Emergency: 1800-XXX-XXXX (Toll-free)
-
-    ---
-
-    ### 📝 Version Information
-
-    - **Version**: 1.0.0
-    - **Release Date**: October 2025
-    - **Last Updated**: """
-        + datetime.now().strftime("%B %d, %Y")
-        + """
-    - **Region**: Northeast India (7 states)
-    - **Languages**: English
-
-    ---
-
-    **Developed for rural communities of Northeast India** 🌏💧
-    """
-    )
-
-
-# ============================================================================
-# RUN APP
-# ============================================================================
 if __name__ == "__main__":
     main()
